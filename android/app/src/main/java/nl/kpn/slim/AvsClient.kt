@@ -70,16 +70,12 @@ class AvsClient(
     private val base get() = "https://$avsHost/000002/1.5/A/nld/androidtv/kpn"
 
     /**
-     * One-time sign-in: registers this client's [deviceId] with the account by presenting the password once.
-     * [account] may be the account number or the e-mail address. Returns the account number (what later
-     * sessions need), taken from the profile in the reply.
+     * One-time sign-in: registers this client's [deviceId] with the account by presenting the pincode once,
+     * like the KPN web player's subscription number + pincode login. [account] is the abonnementsnummer.
+     * Returns the account number (what later sessions need) as given back in the profile.
      */
     @Synchronized
-    fun register(password: String): String {
-        val tan = newSession(password)
-        return tan.ifEmpty { account.takeIf { a -> a.all(Char::isDigit) } }
-            ?: throw AvsException("Signed in, but the reply has no account number")
-    }
+    fun register(pin: String): String = newSession(pin).ifEmpty { account }
 
     @Synchronized
     fun liveChannels(): List<Channel> {
@@ -175,16 +171,10 @@ class AvsClient(
         }
     }
 
-    /** Creates a session. With [password] it also registers the deviceId; returns the account number from the profile. */
-    private fun newSession(password: String? = null): String {
+    /** Creates a session. With [pin] it also registers the deviceId; returns the account number from the profile. */
+    private fun newSession(pin: String? = null): String {
         if (avsHost == null) {
-            val ear = if (password != null && !account.all(Char::isDigit)) {
-                // E-mail sign-in: the AVS host is looked up with the credentials instead of an account number.
-                val creds = JSONObject().put("username", account).put("password", password)
-                request("POST", "$EAR?type=ott", creds.toString(), auth = false)
-            } else {
-                request("GET", "$EAR?type=ott&tan=${enc(account)}", body = null, auth = false)
-            }
+            val ear = request("GET", "$EAR?type=ott&tan=${enc(account)}", body = null, auth = false)
             avsHost = ear.getJSONObject("result").getString("url")
         }
         cookies.clear()
@@ -201,7 +191,7 @@ class AvsClient(
             .put("serialNumber", "NotAvailable")
             .put("ipAddress", "127.0.0.1")
         val std = JSONObject().put("deviceInfo", deviceInfo)
-        if (password != null) std.put("username", account).put("password", password).put("remember", true)
+        if (pin != null) std.put("username", account).put("password", pin).put("remember", true)
         val body = JSONObject().put("credentialsStdAuth", std)
         val json = try {
             request("POST", "$base/USER/SESSIONS/", body.toString(), auth = false)

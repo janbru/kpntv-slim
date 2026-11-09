@@ -922,7 +922,7 @@ class MainActivity : Activity(), LifecycleOwner {
         val user = loginUser.text.toString().trim()
         val pass = loginPass.text.toString()
         if (user.isEmpty() || pass.isEmpty()) {
-            showLoginError("Enter your account number or e-mail address and your password")
+            showLoginError("Enter your abonnementsnummer and pincode")
             return
         }
         (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(loginPass.windowToken, 0)

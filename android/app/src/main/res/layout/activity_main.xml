@@ -432,25 +432,25 @@
             android:layout_height="wrap_content"
             android:layout_marginBottom="10dp"
             android:layout_marginTop="4dp"
-            android:text="Needed once. Your password goes to KPN only and is not stored on this TV."
+            android:text="Needed once. Your pincode goes to KPN only and is not stored on this TV."
             android:textColor="#B0FFFFFF"
             android:textSize="14sp" />
 
         <EditText
             android:id="@+id/login_user"
             style="@style/LoginField"
-            android:hint="Account number or e-mail"
+            android:hint="Abonnementsnummer"
             android:imeOptions="actionNext"
-            android:inputType="textEmailAddress"
+            android:inputType="number"
             android:nextFocusDown="@+id/login_pass" />
 
         <EditText
             android:id="@+id/login_pass"
             style="@style/LoginField"
             android:layout_marginTop="10dp"
-            android:hint="Password"
+            android:hint="Pincode"
             android:imeOptions="actionDone"
-            android:inputType="textPassword"
+            android:inputType="numberPassword"
             android:nextFocusDown="@+id/login_button" />
 
         <TextView

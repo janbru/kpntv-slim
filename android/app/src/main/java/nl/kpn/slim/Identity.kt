@@ -8,7 +8,7 @@ import java.security.SecureRandom
 data class Identity(val account: String, val deviceId: String)
 
 /**
- * Keeps the [Identity] in the app's private preferences. The password is never stored: it is only sent
+ * Keeps the [Identity] in the app's private preferences. The pincode is never stored: it is only sent
  * to KPN once, at sign-in, and from then on sessions are minted from the deviceId alone.
  */
 object IdentityStore {
