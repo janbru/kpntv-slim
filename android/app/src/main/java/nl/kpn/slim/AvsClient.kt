@@ -71,6 +71,9 @@ class AvsClient(
     private var xsrf: String? = null
     private var sessionAt = 0L
 
+    /** Milliseconds since the current session was made; -1 before the first one. For the stats overlay. */
+    fun sessionAgeMs(): Long = if (sessionAt == 0L) -1 else System.currentTimeMillis() - sessionAt
+
     private val base get() = "https://$avsHost/000002/1.5/A/nld/androidtv/kpn"
 
     /**
@@ -308,6 +311,6 @@ class AvsClient(
         private const val EAR = "https://ausar.tcloud-itv-prd1.prod.aws.kpn.com/public/v1/ear"
         /** Logos are shown at most 40 dp high; 100 px is sharp on a 1080p TV and only ~3 KB. */
         const val LOGO_HEIGHT = 100
-        private const val SESSION_TTL_MS = 3L * 60 * 60 * 1000 // avs6_cookie lives 4h
+        const val SESSION_TTL_MS = 3L * 60 * 60 * 1000 // avs6_cookie lives 4h
     }
 }

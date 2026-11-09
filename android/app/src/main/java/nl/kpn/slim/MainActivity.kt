@@ -6,6 +6,7 @@ import android.animation.ArgbEvaluator
 import android.animation.ValueAnimator
 import android.app.Activity
 import android.os.Bundle
+import android.os.Debug
 import android.text.Spannable
 import android.text.SpannableStringBuilder
 import android.text.style.ForegroundColorSpan
@@ -33,7 +34,9 @@ import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Timeline
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
+import androidx.media3.exoplayer.DecoderReuseEvaluation
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -102,6 +105,12 @@ class MainActivity : Activity(), LifecycleOwner {
     private lateinit var valueHighBw: TextView
     private lateinit var valueBanner: TextView
     private lateinit var tracksPanel: View
+    private lateinit var stats: TextView
+    private var statsJob: Job? = null
+    private var bandwidthMeter: DefaultBandwidthMeter? = null
+    private var decoderName = "-"
+    private var formatSwitches = ArrayList<Long>() // wall-clock times of quality switches in this stream
+    private var firstFormatSeen = false
     private lateinit var rowAudio: View
     private lateinit var rowSubs: View
     private lateinit var valueAudio: TextView
@@ -237,6 +246,7 @@ class MainActivity : Activity(), LifecycleOwner {
         rowHighBw.setOnClickListener { adjustSetting(rowHighBw, 1) }
         rowBanner.setOnClickListener { adjustSetting(rowBanner, 1) }
         tracksPanel = findViewById(R.id.tracks)
+        stats = findViewById(R.id.stats)
         rowAudio = findViewById(R.id.row_audio)
         rowSubs = findViewById(R.id.row_subs)
         valueAudio = findViewById(R.id.value_audio)
@@ -271,13 +281,16 @@ class MainActivity : Activity(), LifecycleOwner {
 
     private fun buildPlayer() {
         val builder = ExoPlayer.Builder(this)
-        if (highBandwidthStart) {
-            // A generous initial estimate makes adaptive selection pick the top rendition (8 Mbps) right away.
-            builder.setBandwidthMeter(DefaultBandwidthMeter.Builder(this).setInitialBitrateEstimate(HIGH_START_BPS).build())
-        }
+        // A generous initial estimate makes adaptive selection pick the top rendition (8 Mbps) right away.
+        // Otherwise the shared default meter, which is what ExoPlayer would use anyway (and remembers its estimate).
+        val meter = if (highBandwidthStart) DefaultBandwidthMeter.Builder(this).setInitialBitrateEstimate(HIGH_START_BPS).build()
+        else DefaultBandwidthMeter.getSingletonInstance(this)
+        bandwidthMeter = meter
+        builder.setBandwidthMeter(meter)
         player = builder.build().also { p ->
             p.playWhenReady = true
             p.addListener(playerListener)
+            p.addAnalyticsListener(statsListener)
             playerView.player = p
         }
     }
@@ -386,12 +399,28 @@ class MainActivity : Activity(), LifecycleOwner {
                 // A different stream starts here: its first values must not glow against the previous stream's.
                 lastParts = emptyMap()
                 glowKeys = emptySet()
+                formatSwitches.clear()
+                firstFormatSeen = false
                 streamAnim?.cancel()
                 if (timeshiftBase != null) p.setMediaItem(item, timeshiftStartPos) else p.setMediaItem(item)
                 p.playWhenReady = !startPaused
                 setPausedIndicator(startPaused)
                 p.prepare()
             }.onFailure { hideLoader(); showStatus("${ch.name}: ${it.message}") }
+        }
+    }
+
+    /** Feeds the stats overlay: which decoder is in use and how often the quality switched in this stream. */
+    private val statsListener = object : AnalyticsListener {
+        override fun onVideoDecoderInitialized(
+            eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long,
+        ) { this@MainActivity.decoderName = decoderName }
+
+        override fun onVideoInputFormatChanged(
+            eventTime: AnalyticsListener.EventTime, format: Format, decoderReuseEvaluation: DecoderReuseEvaluation?,
+        ) {
+            // The first format of a stream is the start, not a switch.
+            if (firstFormatSeen) formatSwitches.add(System.currentTimeMillis()) else firstFormatSeen = true
         }
     }
 
@@ -543,6 +572,7 @@ class MainActivity : Activity(), LifecycleOwner {
             KeyEvent.KEYCODE_PROG_RED -> startOver()
             KeyEvent.KEYCODE_PROG_GREEN -> showInfo()
             KeyEvent.KEYCODE_PROG_YELLOW -> showTracks()
+            KeyEvent.KEYCODE_PROG_BLUE -> toggleStats()
             else -> return super.dispatchKeyEvent(event)
         }
         return true
@@ -1134,6 +1164,82 @@ class MainActivity : Activity(), LifecycleOwner {
         }
     }
 
+    // ---- stream stats (blue key) ----
+
+    private fun toggleStats() {
+        if (stats.visibility == View.VISIBLE) {
+            statsJob?.cancel()
+            stats.visibility = View.GONE
+            return
+        }
+        stats.visibility = View.VISIBLE
+        statsJob = lifecycleScope.launch {
+            while (true) {
+                stats.text = statsText()
+                delay(STATS_REFRESH_MS)
+            }
+        }
+    }
+
+    private fun statsText(): String {
+        val p = player ?: return "No player"
+        val ch = channels.getOrNull(current)
+        val behind = secondsBehindLive()
+        val mode = when {
+            curCatchUp != null -> "catch-up"
+            timeshiftBase != null -> "start over, ${clockLength(behind)} behind live"
+            p.playWhenReady.not() -> "paused, ${clockLength(behind)} behind live"
+            behind >= 3 -> "${clockLength(behind)} behind live"
+            else -> "live"
+        }
+        val lines = ArrayList<Pair<String, String>>()
+        lines += "Channel" to "${ch?.number ?: "-"} ${ch?.name ?: ""}  ·  $mode"
+
+        // Video: what plays, and where it sits among the renditions on offer (trick-play tracks excluded).
+        val vf = p.videoFormat
+        val offered = p.currentTracks.groups.filter { it.type == C.TRACK_TYPE_VIDEO }
+            .flatMap { g -> (0 until g.length).map { g.getTrackFormat(it) } }
+            .filter { it.roleFlags and C.ROLE_FLAG_TRICK_PLAY == 0 && it.bitrate > 0 }
+            .map { it.bitrate }.distinct().sorted()
+        lines += "Video" to if (vf == null) "-" else {
+            val rank = offered.indexOfFirst { it == vf.bitrate }.takeIf { it >= 0 && offered.size > 1 }
+                ?.let { "  (${it + 1} of ${offered.size})" }.orEmpty()
+            "${vf.width}x${vf.height}  ${if (vf.frameRate > 0) fmtNum(vf.frameRate) + " fps  " else ""}" +
+                "${codecName(vf.sampleMimeType) ?: "?"}  ${"%.1f".format(vf.bitrate / 1_000_000f)} Mbps$rank"
+        }
+        val af = p.audioFormat
+        lines += "Audio" to if (af == null) "-" else
+            audioLabel(af) + if (af.bitrate > 0) "  ${af.bitrate / 1000} kbps" else ""
+
+        val ahead = p.totalBufferedDuration
+        lines += "Buffer" to "%.1f s ahead".format(ahead / 1000f)
+        if (p.isCurrentMediaItemLive && timeshiftBase == null) {
+            val off = p.currentLiveOffset
+            val target = if (p.currentTimeline.isEmpty) 0L
+            else p.currentTimeline.getWindow(p.currentMediaItemIndex, Timeline.Window()).liveConfiguration?.targetOffsetMs ?: 0L
+            lines += "Latency" to if (off == C.TIME_UNSET) "-" else "%.1f s  (target %.1f s)".format(off / 1000f, target / 1000f)
+        }
+        val bps = bandwidthMeter?.bitrateEstimate ?: 0L
+        lines += "Network" to if (bps > 0) "%.1f Mbps measured".format(bps / 1_000_000f) else "-"
+        val now = System.currentTimeMillis()
+        formatSwitches.removeAll { now - it > STATS_SWITCH_WINDOW_MS }
+        lines += "Switches" to "${formatSwitches.size} in the last ${STATS_SWITCH_WINDOW_MS / 60_000} min"
+        val counters = p.videoDecoderCounters
+        if (counters != null) {
+            counters.ensureUpdated()
+            lines += "Frames" to "${counters.droppedBufferCount} dropped of ${counters.renderedOutputBufferCount + counters.droppedBufferCount}"
+        }
+        lines += "Decoder" to decoderName
+        val age = if (this::avs.isInitialized) avs.sessionAgeMs() else -1L
+        lines += "Session" to if (age < 0) "-"
+        else "${clockLength(age / 1000)} old  (renews after ${AvsClient.SESSION_TTL_MS / 3_600_000} h)"
+        val mem = Debug.MemoryInfo().also { Debug.getMemoryInfo(it) }.totalPss / 1024
+        lines += "Memory" to "$mem MB in use"
+
+        val width = lines.maxOf { it.first.length }
+        return lines.joinToString("\n") { (k, v) -> k.padEnd(width + 2) + v }
+    }
+
     // ---- audio and subtitles (yellow key) ----
 
     private fun showTracks() {
@@ -1327,6 +1433,8 @@ class MainActivity : Activity(), LifecycleOwner {
         private const val STREAM_FADE_MS = 700L
         private const val SEEK_REPEAT_MS = 1500L
         private const val SEEK_HINT_MS = 1800L
+        private const val STATS_REFRESH_MS = 1000L
+        private const val STATS_SWITCH_WINDOW_MS = 10L * 60_000
         /** Seek step in seconds; each quick repeat of the key moves one step up the ladder. */
         private val SEEK_STEPS_S = longArrayOf(10, 30, 60, 120, 300)
         // Artwork size in px (the image host scales to any WxH): ~2x the dp size of the view.

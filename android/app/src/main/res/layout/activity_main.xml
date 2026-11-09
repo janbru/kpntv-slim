@@ -419,6 +419,21 @@
             android:textSize="13sp" />
     </LinearLayout>
 
+    <!-- Stream stats (blue key): a non-modal overlay, every other key keeps working -->
+    <TextView
+        android:id="@+id/stats"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_margin="40dp"
+        android:background="@drawable/osd_bg"
+        android:fontFamily="monospace"
+        android:lineSpacingMultiplier="1.15"
+        android:padding="16dp"
+        android:textColor="@android:color/white"
+        android:textSize="15sp"
+        android:visibility="gone" />
+
     <!-- Audio and subtitle picker (yellow key) -->
     <LinearLayout
         android:id="@+id/tracks"
