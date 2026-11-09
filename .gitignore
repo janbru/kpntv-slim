@@ -1,0 +1,23 @@
+# Large / third-party artifacts (regenerable, see NEXT_STEPS.md)
+*.apkm
+jadx-out/
+libs/
+tools/*.jar
+
+# Live captures: contain session tokens, WireGuard keys, account data
+capture/
+
+# Personal
+my-tv.jpg
+
+# Android / Gradle
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/
+android/local.properties
+# Holds the account + deviceId credentials and the machine-specific JDK path.
+# Copy android/gradle.properties.example to android/gradle.properties and fill it in.
+android/gradle.properties
+
+.DS_Store

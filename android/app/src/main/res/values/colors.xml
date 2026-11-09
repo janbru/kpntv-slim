@@ -1,0 +1,7 @@
+<resources>
+    <color name="kpn_green">#00C300</color>
+    <color name="panel">#E6101010</color>
+    <color name="item_focused">#FF00C300</color>
+    <color name="item_playing">#33FFFFFF</color>
+    <color name="progress">#F5C842</color>
+</resources>
