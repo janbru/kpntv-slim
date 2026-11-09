@@ -14,14 +14,21 @@ import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** Tiny logo loader: in-memory LRU, a few parallel downloads, no disk cache (logos are ~2 KB each). */
+/**
+ * Tiny image loader for channel logos and programme artwork: in-memory LRU capped by bytes (not count,
+ * since a 320x180 thumbnail is about 100x the size of a logo), a few parallel downloads, no disk cache.
+ */
 class LogoLoader(private val scope: CoroutineScope) {
-    private val cache = LruCache<String, Bitmap>(200)
+    private val cache = object : LruCache<String, Bitmap>(CACHE_BYTES) {
+        override fun sizeOf(key: String, value: Bitmap) = value.byteCount
+    }
     private val limit = Semaphore(4)
     private val failed = HashSet<String>()
 
-    /** The view is GONE until a bitmap arrives, so a missing logo leaves no gap. */
+    /** The view is GONE until a bitmap arrives, so a missing image leaves no gap. */
     fun load(url: String?, into: ImageView) {
+        // Same image already shown or on its way (the banner re-binds every second): nothing to do.
+        if (url != null && into.tag == url) return
         into.tag = url
         into.setImageDrawable(null)
         into.visibility = View.GONE
@@ -52,5 +59,9 @@ class LogoLoader(private val scope: CoroutineScope) {
         } finally { conn.disconnect() }
     } catch (_: Exception) {
         null
+    }
+
+    private companion object {
+        const val CACHE_BYTES = 12 * 1024 * 1024
     }
 }

@@ -15,7 +15,7 @@ Captured via WireGuard-mode mitmproxy + reFlutter SSL-bypass build on a Philips 
 |---|---|
 | `ausar.tcloud-itv-prd1.prod.aws.kpn.com` | EAR: account → AVS host discovery |
 | `api-avs67.tv.prod.itvavs.prod.aws.kpn.com` | AVS REST API |
-| `images.tv.kpn.com` | channel logos / artwork (prefix for relative logo paths) |
+| `images.tv.kpn.com` | artwork: `/logo/{externalId}/{height}.png`, `/epg/{pictureUrl}/{w}x{h}.jpg?blurred=false` |
 | `*.video.kpnstreaming.nl` | DASH streaming CDN (edge servers) |
 | `drm-proxy.streaming.kpn.com` | Widevine license server |
 
@@ -59,7 +59,7 @@ GET /TRAY/LIVECHANNELS?orderBy=orderId&sortOrder=asc&from=0&to=999&dfilter_chann
    container.metadata.externalId    "dtvchannels_1"
    container.assets[0].assetId      10          <- used in VIDEOURL
    container.assets[0].videoType    "SD_DASH_WV"
-   container.assets[0].logoBig/Medium/Small  "size_x/dtvchannels_1_226x314.png"  (prefix images.tv.kpn.com)
+   container.assets[0].logoBig/Medium/Small  "size_x/dtvchannels_1_226x314.png"  (dead paths, 404; use /logo/{externalId}/{height}.png on images.tv.kpn.com)
 ```
 
 ## 4. Get play URL (live)

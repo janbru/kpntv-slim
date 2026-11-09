@@ -22,15 +22,41 @@
         android:layout_gravity="bottom|center_horizontal"
         android:layout_marginBottom="40dp"
         android:background="@drawable/osd_bg"
-        android:orientation="vertical"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
         android:paddingHorizontal="20dp"
         android:paddingVertical="12dp"
         android:visibility="gone">
 
+        <ImageView
+            android:id="@+id/osd_thumb"
+            android:layout_width="144dp"
+            android:layout_height="81dp"
+            android:layout_marginEnd="16dp"
+            android:scaleType="centerCrop"
+            android:visibility="gone" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:gravity="center_vertical"
             android:orientation="horizontal">
+
+            <ImageView
+                android:id="@+id/osd_logo"
+                android:layout_width="wrap_content"
+                android:layout_height="24dp"
+                android:layout_marginEnd="10dp"
+                android:adjustViewBounds="true"
+                android:maxWidth="72dp"
+                android:scaleType="fitCenter"
+                android:visibility="gone" />
 
             <TextView
                 android:id="@+id/osd_number"
@@ -112,6 +138,7 @@
             android:layout_marginTop="4dp"
             android:max="1000"
             android:progressDrawable="@drawable/osd_progress" />
+        </LinearLayout>
     </LinearLayout>
 
     <!-- Channel list overlay (OK / Menu to open) -->
@@ -193,6 +220,12 @@
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
             android:orientation="vertical">
 
             <TextView
@@ -236,6 +269,15 @@
                 android:lineSpacingMultiplier="1.1"
                 android:textColor="#B3FFFFFF"
                 android:textSize="14sp" />
+        </LinearLayout>
+
+        <ImageView
+            android:id="@+id/info_image"
+            android:layout_width="320dp"
+            android:layout_height="180dp"
+            android:layout_marginStart="24dp"
+            android:scaleType="centerCrop"
+            android:visibility="gone" />
         </LinearLayout>
     </ScrollView>
 

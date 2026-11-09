@@ -12,6 +12,7 @@ import android.text.style.ForegroundColorSpan
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
+import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.lifecycle.LifecycleOwner
@@ -75,6 +76,9 @@ class MainActivity : Activity(), LifecycleOwner {
     private lateinit var rowStartOver: View
     private lateinit var rowLive: View
     private lateinit var info: View
+    private lateinit var osdThumb: ImageView
+    private lateinit var osdLogo: ImageView
+    private lateinit var infoImage: ImageView
     private lateinit var infoTitle: TextView
     private lateinit var infoEpisode: TextView
     private lateinit var infoMeta: TextView
@@ -146,6 +150,9 @@ class MainActivity : Activity(), LifecycleOwner {
         rowStartOver = findViewById(R.id.row_startover)
         rowLive = findViewById(R.id.row_live)
         info = findViewById(R.id.info)
+        osdThumb = findViewById(R.id.osd_thumb)
+        osdLogo = findViewById(R.id.osd_logo)
+        infoImage = findViewById(R.id.info_image)
         infoTitle = findViewById(R.id.info_title)
         infoEpisode = findViewById(R.id.info_episode)
         infoMeta = findViewById(R.id.info_meta)
@@ -502,6 +509,7 @@ class MainActivity : Activity(), LifecycleOwner {
         val ch = channels.getOrNull(current) ?: return
         val prog = epg.now(ch.id, playedAt())
         osd.visibility = View.GONE
+        logos.load(prog?.imageUrl(INFO_IMAGE_W, INFO_IMAGE_H), infoImage)
         infoTitle.text = prog?.title ?: ch.name
         if (prog == null) {
             infoEpisode.text = ""
@@ -692,6 +700,8 @@ class MainActivity : Activity(), LifecycleOwner {
         val next = ch?.let { epg.next(it.id, at) }
         val behindMin = secondsBehindLive() / 60
         osdClock.text = epg.time(System.currentTimeMillis()) + if (behindMin >= 1) "  (-$behindMin min)" else ""
+        logos.load(ch?.logoUrl, osdLogo)
+        logos.load(now?.imageUrl(OSD_IMAGE_W, OSD_IMAGE_H), osdThumb)
         osdTitle.text = now?.title.orEmpty()
         osdTime.text = now?.let { "${epg.time(it.startMs)} – ${epg.time(it.endMs)}" }.orEmpty()
         osdNext.text = next?.let { "Volgend: ${it.title}" }.orEmpty()
@@ -713,6 +723,11 @@ class MainActivity : Activity(), LifecycleOwner {
     companion object {
         private const val MIN_BANNER_S = 1
         private const val MAX_BANNER_S = 15
+        // Artwork sizes in px (the image host scales to any WxH): ~2x the dp size of the views.
+        private const val OSD_IMAGE_W = 320
+        private const val OSD_IMAGE_H = 180
+        private const val INFO_IMAGE_W = 640
+        private const val INFO_IMAGE_H = 360
         private const val HIGH_START_BPS = 20_000_000L
         private const val GLOW_MS = 2500L
     }

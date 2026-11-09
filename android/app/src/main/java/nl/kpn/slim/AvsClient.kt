@@ -32,7 +32,21 @@ data class Program(
     val ageRating: Int = 0,
     /** The API flags whether this programme may be restarted from its beginning. */
     val startOver: Boolean = false,
-)
+    /** Opaque artwork id; see [programImageUrl]. */
+    val pictureId: String = "",
+) {
+    fun imageUrl(w: Int, h: Int): String? = programImageUrl(pictureId, w, h)
+}
+
+private const val IMAGE_HOST = "https://images.tv.kpn.com"
+
+/** Channel logo, scaled to [height] px (width follows the aspect ratio). Pattern taken from the KPN web player. */
+fun channelLogoUrl(externalId: String, height: Int): String? =
+    externalId.takeIf { it.isNotEmpty() }?.let { "$IMAGE_HOST/logo/$it/$height.png" }
+
+/** Programme artwork at exactly [w]x[h] px. */
+fun programImageUrl(pictureId: String, w: Int, h: Int): String? =
+    pictureId.takeIf { it.isNotEmpty() }?.let { "$IMAGE_HOST/epg/$it/${w}x$h.jpg?blurred=false" }
 
 class AvsException(message: String) : IOException(message)
 
@@ -62,13 +76,12 @@ class AvsClient(
             val c = containers.getJSONObject(i)
             val md = c.getJSONObject("metadata")
             val asset = c.optJSONArray("assets")?.optJSONObject(0) ?: return@mapNotNull null
-            val logo = asset.optString("logoMedium").ifEmpty { asset.optString("logoSmall") }
             Channel(
                 id = md.getInt("channelId"),
                 number = md.optInt("orderId", i + 1),
                 name = md.optString("channelName"),
                 assetId = asset.getInt("assetId"),
-                logoUrl = logo.takeIf { it.isNotEmpty() }?.let { "https://images.tv.kpn.com/$it" },
+                logoUrl = channelLogoUrl(md.optString("externalId"), LOGO_HEIGHT),
             )
         }
     }
@@ -112,6 +125,7 @@ class AvsClient(
                     actors = md.strings("actors"),
                     ageRating = md.optInt("pcLevel"),
                     startOver = md.strings("contentOptions").contains("STARTOVER"),
+                    pictureId = md.optString("pictureUrl"),
                 )
             }.sortedBy { it.startMs }
         }
@@ -237,6 +251,8 @@ class AvsClient(
 
     companion object {
         const val APP_VERSION = "09.06.00"
+        /** Logos are shown at most 40 dp high; 100 px is sharp on a 1080p TV and only ~3 KB. */
+        const val LOGO_HEIGHT = 100
         private const val SESSION_TTL_MS = 3L * 60 * 60 * 1000 // avs6_cookie lives 4h
     }
 }

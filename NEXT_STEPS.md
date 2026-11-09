@@ -1,8 +1,8 @@
 # KPN TV+ slim: project state & next steps
 
-Last updated: 2026-11-09 (end of session 3). Read this first when resuming.
+Last updated: 2026-11-09 (session 4). Read this first when resuming.
 
-## Status: native app works on the TV (v0.5)
+## Status: native app works on the TV (v0.6)
 
 Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kpn.slim`, label "KPN Slim"). Release APK about 1.2 MB. The git repo is local only (6 commits on `main`).
 
@@ -10,13 +10,14 @@ Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kp
 - Build: `cd android && ./gradlew assembleRelease` (JDK 21 pinned in `gradle.properties`; Homebrew's default JDK 26 breaks Gradle 8.14).
 - Install: `~/Library/Android/sdk/platform-tools/adb -s 192.168.2.21:5555 install -r app/build/outputs/apk/release/app-release.apk` (debug-keystore signed; coexists with the official app). Launch: `adb shell am start -n nl.kpn.slim/.MainActivity`.
 - **`android/gradle.properties` is git-ignored** (account, deviceId, JDK path). On a fresh clone copy `gradle.properties.example` to `gradle.properties` and fill it in. Also ignored: `capture/` (tokens, WireGuard keys), `jadx-out/`, `libs/`, the `.apkm`, `tools/*.jar`, `my-tv.jpg`.
+- The web player at tv.kpn.com is a useful reference for URL patterns (its `app.js` is readable); try it before a recapture.
 - FINDINGS.md, API_CONTRACT.md and this file still contain the account number and deviceId in plain text. Redact before sharing the repo or adding a remote.
 
 ### Code map (`android/app/src/main/java/nl/kpn/slim/`)
-- `AvsClient.kt`: EAR, SESSIONS, LIVECHANNELS, VIDEOURL, EPG. `HttpURLConnection` + `org.json`, cookie/xsrf rotation, 3 h session refresh, retry once. `Program` carries description, genres, cast, year, age rating, `startOver` flag.
+- `AvsClient.kt`: EAR, SESSIONS, LIVECHANNELS, VIDEOURL, EPG. `HttpURLConnection` + `org.json`, cookie/xsrf rotation, 3 h session refresh, retry once. `Program` carries `pictureId`, description, genres, cast, year, age rating, `startOver` flag.
 - `Epg.kt`: in-memory guide. `now/next(channelId, at)`, refresh every 15 min, merges refreshes and keeps programmes that ended up to 6 h ago.
 - `MainActivity.kt`: everything UI. ExoPlayer DASH + Widevine, zapping, overlays (list, options menu, info panel, settings, banner), pause, start over, stream info.
-- `ChannelAdapter.kt`: channel list, first row is "Settings". `LogoLoader.kt`: logo loading (logos currently 404, see gaps).
+- `ChannelAdapter.kt`: channel list, first row is "Settings". `LogoLoader.kt`: image loader for logos and programme artwork (byte-capped 12 MB LRU, 4 parallel downloads, hides the view when there is no image).
 - Layout: `res/layout/activity_main.xml` holds all overlays. Colours in `res/values/colors.xml`.
 
 ### Remote control
@@ -37,6 +38,11 @@ Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kp
 - **Settings** (SharedPreferences `slim`): "High bandwidth start" (default Off) gives ExoPlayer a 20 Mbps initial bandwidth estimate so playback starts at 1080p50 / 8 Mbps instead of ramping up from 768x432. Only matters on a cold start, because the shared bandwidth meter remembers its estimate afterwards. "Info banner duration" 1-15 s (default 5). Toggling the first one rebuilds the player and re-tunes.
 - The TV currently has High bandwidth start **Off** and banner **15 s** (left over from testing).
 
+- **Images** (v0.6): channel logo in the list rows and the banner header, programme artwork in the banner (320x180 thumbnail on the left) and the info panel (640x360 on the right). URL patterns come from the KPN web player bundle (`https://tv.kpn.com/app.js`, helpers `wt` and `Xr`), no app recapture needed:
+  - Channel logo: `https://images.tv.kpn.com/logo/{externalId}/{height}.png` (`externalId` from LIVECHANNELS metadata, e.g. `dtvchannels_1`; height 100 gives 149x100; transparent PNG; all 108 channels verified).
+  - Programme: `https://images.tv.kpn.com/epg/{pictureUrl}/{w}x{h}.jpg?blurred=false` (`pictureUrl` from the EPG metadata; any WxH works; `vod/` instead of `epg/` for non-programme content; `blurred=true` gives a blurred variant; `round=true` gives a round PNG).
+  - Provider logos: `/misc/provider/{id}/{w}x{h}.png`. The old `logoMedium`/`size_x/...` paths in the channel assets are dead.
+
 ### Findings about the streams (see also FINDINGS.md)
 - Channel metadata says SD/MPEG-2 for every channel, but the DASH manifests have H.264 up to 1080p50 (6 and 8 Mbps), AC-3 5.1 at 384 kbps or AAC stereo 128 kbps, a Dutch subtitle stream and trick-play tracks. Some channels are 1080p25.
 - Per programme the EPG also has `pictureUrl`, `starRating`, `contentOptions` (`STARTOVER`, `CATCHUP`, `RECORDABLE`, `TV_PREMIERE`). Per channel: timeshift on 105, out-of-home (`OOH`) on 82, `PLUS` on 25, unicast on 21.
@@ -49,10 +55,9 @@ Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kp
 - Press keys one at a time and screenshot; the banner hides itself after the configured duration.
 
 ### Known gaps / next ideas
-- **Channel logos don't load**: `images.tv.kpn.com/{logoMedium}` (e.g. `size_x/dtvchannels_1_100x50.png`) returns 404. About 20 URL guesses with curl failed; the real pattern needs a live recapture with `images\.tv\.kpn\.com` in `--allow-hosts` (libapp.so has a `/logo/` path segment). Requires re-patching the official app and a fresh login on the TV (see recapture steps below). Views collapse gracefully meanwhile.
 - Audio and subtitle track picker (manifest has a second Dutch audio track and a Dutch subtitle stream; ExoPlayer picks defaults).
 - Catch-up of earlier programmes and a full EPG grid (the `TRAY/EPG` endpoint takes any time range; start-over proves play URLs accept past times).
-- Programme artwork via `pictureUrl` (image host pattern unknown, same recapture as logos).
+- Artwork in the channel list rows (small programme thumbnail) or a grid-style EPG.
 - Recordings/CPVR, out-of-home, trick-play thumbnails while scrubbing (no seeking UI yet).
 - deviceId is hardcoded to this TV; deriving it on-device (serial-based SHA-256) would make the app portable.
 - Long pause: if the manifest token expires the player errors once and the app re-tunes live (not resumed at the paused position).
