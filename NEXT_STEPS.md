@@ -1,35 +1,61 @@
-# KPN TV+ slim — project state & next steps
+# KPN TV+ slim: project state & next steps
 
-Last updated: 2026-11-09. Read this first when resuming.
+Last updated: 2026-11-09 (end of session 3). Read this first when resuming.
 
-## Status: v0.1 app BUILT and running on the TV (2026-11-09).
+## Status: native app works on the TV (v0.5)
 
-App lives in `android/` (package `nl.kpn.slim`, label "KPN Slim"). Release APK 1.1 MB, ~72 MB PSS while playing.
+Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kpn.slim`, label "KPN Slim"). Release APK about 1.2 MB. The git repo is local only (6 commits on `main`).
+
+### Build, install, setup
 - Build: `cd android && ./gradlew assembleRelease` (JDK 21 pinned in `gradle.properties`; Homebrew's default JDK 26 breaks Gradle 8.14).
-- Install: `adb -s 192.168.2.21:5555 install -r app/build/outputs/apk/release/app-release.apk` (signed with the debug keystore; installs alongside the official app).
-- Account + deviceId come from `android/gradle.properties` (`kpn.account`, `kpn.deviceId`) into BuildConfig.
-- Code: `AvsClient.kt` (EAR → SESSIONS → LIVECHANNELS → VIDEOURL, HttpURLConnection + org.json, cookie/xsrf rotation, 3h session refresh + retry once), `MainActivity.kt` (ExoPlayer DASH + Widevine, zap/list/digits/OSD), `ChannelAdapter.kt`, `LogoLoader.kt`.
-- Remote: Up/Down or CH± zap, digits = channel number, OK = options menu, Menu/Left/Guide = channel list, Right/Info = banner (press again = options menu), Back closes overlay/exits. Remembers last channel.
-- Verified on TV: session, 108 channels, Widevine playback, zapping, list overlay.
+- Install: `~/Library/Android/sdk/platform-tools/adb -s 192.168.2.21:5555 install -r app/build/outputs/apk/release/app-release.apk` (debug-keystore signed; coexists with the official app). Launch: `adb shell am start -n nl.kpn.slim/.MainActivity`.
+- **`android/gradle.properties` is git-ignored** (account, deviceId, JDK path). On a fresh clone copy `gradle.properties.example` to `gradle.properties` and fill it in. Also ignored: `capture/` (tokens, WireGuard keys), `jadx-out/`, `libs/`, the `.apkm`, `tools/*.jar`, `my-tv.jpg`.
+- FINDINGS.md, API_CONTRACT.md and this file still contain the account number and deviceId in plain text. Redact before sharing the repo or adding a remote.
 
-### v0.2: EPG now/next (done 2026-11-09)
-`AvsClient.epg()` does one `GET /TRAY/EPG?filter_startTime={now}&filter_endTime={now+3h}&filter_channelIds={all ids}&outputFormat=EXTENDED` (~400 KB, ~0.4 s, all 108 channels). Response: `containers[]` per channel (`metadata.channelId`) with nested `containers[]` programs (`metadata.title/airingStartTime/airingEndTime`, also `pictureUrl`, `longDescription`). `Epg.kt` holds it in memory (refresh when older than 15 min, on OSD/list open); list rows show the current program, the banner shows now + next. Verified on the TV.
+### Code map (`android/app/src/main/java/nl/kpn/slim/`)
+- `AvsClient.kt`: EAR, SESSIONS, LIVECHANNELS, VIDEOURL, EPG. `HttpURLConnection` + `org.json`, cookie/xsrf rotation, 3 h session refresh, retry once. `Program` carries description, genres, cast, year, age rating, `startOver` flag.
+- `Epg.kt`: in-memory guide. `now/next(channelId, at)`, refresh every 15 min, merges refreshes and keeps programmes that ended up to 6 h ago.
+- `MainActivity.kt`: everything UI. ExoPlayer DASH + Widevine, zapping, overlays (list, options menu, info panel, settings, banner), pause, start over, stream info.
+- `ChannelAdapter.kt`: channel list, first row is "Settings". `LogoLoader.kt`: logo loading (logos currently 404, see gaps).
+- Layout: `res/layout/activity_main.xml` holds all overlays. Colours in `res/values/colors.xml`.
 
-### v0.3: stream info banner + settings (2026-11-09)
-Bottom info banner shows live video/audio stream info. Settings: first row of the channel list (OK/centre, then Left/Right/OK to change, Back to close). "High bandwidth start" (default off) gives ExoPlayer a 20 Mbps initial bandwidth estimate so it starts at 1080p50/8 Mbps instead of ramping up; "Info banner duration" 1-15 s (default 5). Both live in SharedPreferences `slim`. Info banner keys: Right / Info. The TV's system intercepts the Settings key, so settings are reached via the list.
+### Remote control
+- Up/Down or CH+/CH-: zap. Digits: channel number. Last channel: previous channel.
+- **OK: options menu** (Pause/Play, Start from beginning, Go to live when behind, Programme info, Channel list, Settings).
+- Right or Info: show the bottom banner; press again while it shows to open the options menu.
+- Menu, Left, Guide: channel list (its first row opens Settings).
+- Play/Pause, Pause, Play media keys (and Space): pause. Red: start over. Green: programme info.
+- Back: close the open overlay; with no overlay it **exits the app**.
+- The TV's system intercepts the Settings key, so it is not used.
 
-### v0.4: pause, start over, programme info (2026-11-09)
-- **Start over needs no new endpoint**: `VIDEOURL/LIVE/{ch}/{asset}?time={programStartMs}` (exact ms, not rounded) returns a manifest that begins at that moment (the response URL carries `&t=<ISO time>`). The USP window reaches back about 6 h (tried 10 min to 3 days, anything older is clamped). Played with `setMediaItem(item, 0)`. Programmes carry `contentOptions: STARTOVER`; the app only offers it when that flag is set. After a restart the banner shows `(-N min)`, progress follows the playback position (`now - currentLiveOffset + target offset`), and "Go to live" appears.
-- Careful when testing with curl: AVS rotates the xsrf/cookies, so a second call with the first session's cookie fails with `403-10110 Token not found`. Create a fresh session per call.
-- Pause: Play/Pause, Pause and Play media keys (and Space). Paused indicator top right.
-- Options menu: OK, or Right/Info a second time while the banner is showing (Pause/Play, Start from beginning, Go to live, Programme info, Channel list, Settings). Red = start over, Green = programme info.
-- Programme info panel: title, season/episode, time, genres, year, age rating, description, presenters/directors/cast (all from the EPG response).
+### Features
+- **EPG now/next**: one `GET /TRAY/EPG?filter_startTime={now}&filter_endTime={now+3h}&filter_channelIds={all}&outputFormat=EXTENDED` (about 400 KB, 0.4 s) for all 108 channels. List rows show the current programme.
+- **Bottom banner** (860dp wide, rounded, floating above the bottom edge): channel number and name, live video/audio stream info, clock, programme title, time range, "Volgend: next", progress bar. Stream info is dim; any piece that changes during the same stream (adaptive quality switch) glows green and fades over 2.5 s. A new stream starts without a glow (`lastParts` is reset right before `setMediaItem`).
+- **Start from beginning**: no extra endpoint. `VIDEOURL/LIVE/{ch}/{asset}?time={programStartMs}` (exact ms, not rounded) returns a manifest that begins at that moment (URL carries `&t=<ISO>`). The window reaches back about 6 h (tested 10 min to 3 days, older is clamped). Played with `setMediaItem(item, 0)`. Only offered when the programme has `contentOptions: STARTOVER`. While not live: banner and info panel describe the programme being played (`timeshiftBase + currentPosition`), the clock shows `(-N min)`, "Go to live" appears. "Behind live" is measured against ExoPlayer's target live offset, so plain live never counts as behind.
+- **Pause**: pause icon top right. Live pause works because the dynamic manifest has a long window.
+- **Programme info panel**: title, season/episode, episode title, channel, time and length, genres, year, age rating, description, presenters/directors/cast.
+- **Settings** (SharedPreferences `slim`): "High bandwidth start" (default Off) gives ExoPlayer a 20 Mbps initial bandwidth estimate so playback starts at 1080p50 / 8 Mbps instead of ramping up from 768x432. Only matters on a cold start, because the shared bandwidth meter remembers its estimate afterwards. "Info banner duration" 1-15 s (default 5). Toggling the first one rebuilds the player and re-tunes.
+- The TV currently has High bandwidth start **Off** and banner **15 s** (left over from testing).
 
-- When not live, the banner and info panel describe the programme being *played* (`timeshiftBase + currentPosition`), not the live one. `Epg.replace` merges refreshes and keeps programmes that ended up to 6 h ago so a started-over programme keeps its info after it has left the live guide.
+### Findings about the streams (see also FINDINGS.md)
+- Channel metadata says SD/MPEG-2 for every channel, but the DASH manifests have H.264 up to 1080p50 (6 and 8 Mbps), AC-3 5.1 at 384 kbps or AAC stereo 128 kbps, a Dutch subtitle stream and trick-play tracks. Some channels are 1080p25.
+- Per programme the EPG also has `pictureUrl`, `starRating`, `contentOptions` (`STARTOVER`, `CATCHUP`, `RECORDABLE`, `TV_PREMIERE`). Per channel: timeshift on 105, out-of-home (`OOH`) on 82, `PLUS` on 25, unicast on 21.
+- Firebase remote config (`capture/remote_config.json`) has ad tags and flags such as `highBandwidthStartEnabled`, `aiSearchEnabled`.
+
+### Testing gotchas (learned the hard way)
+- AVS rotates xsrf and cookies: a second curl with the first session's cookie fails with `403-10110 Token not found`. Create a fresh session per call (a helper like `sess.sh` that does EAR + `POST /USER/SESSIONS` and saves cookie jar + xsrf).
+- `adb shell input keyevent KEYCODE_BACK` with no overlay open exits the app, and later keys then drive the TV's launcher (it once opened a movie page). Check the screen before sending key sequences, or use `am force-stop` + `am start`.
+- `adb exec-out screencap -p` takes about 3 s, so keep loops short or run them in the background. Crop with `magick`.
+- Press keys one at a time and screenshot; the banner hides itself after the configured duration.
 
 ### Known gaps / next ideas
-- **Channel logos don't load**: `images.tv.kpn.com/{logoMedium}` (e.g. `size_x/dtvchannels_1_100x50.png`) returns 404. The real URL pattern needs a recapture with `--allow-hosts` including `images\.tv\.kpn\.com` (libapp.so has a `/logo/` path segment). Views collapse gracefully meanwhile.
-- deviceId is hardcoded to this TV; deriving it on-device would make the app portable.
+- **Channel logos don't load**: `images.tv.kpn.com/{logoMedium}` (e.g. `size_x/dtvchannels_1_100x50.png`) returns 404. About 20 URL guesses with curl failed; the real pattern needs a live recapture with `images\.tv\.kpn\.com` in `--allow-hosts` (libapp.so has a `/logo/` path segment). Requires re-patching the official app and a fresh login on the TV (see recapture steps below). Views collapse gracefully meanwhile.
+- Audio and subtitle track picker (manifest has a second Dutch audio track and a Dutch subtitle stream; ExoPlayer picks defaults).
+- Catch-up of earlier programmes and a full EPG grid (the `TRAY/EPG` endpoint takes any time range; start-over proves play URLs accept past times).
+- Programme artwork via `pictureUrl` (image host pattern unknown, same recapture as logos).
+- Recordings/CPVR, out-of-home, trick-play thumbnails while scrubbing (no seeking UI yet).
+- deviceId is hardcoded to this TV; deriving it on-device (serial-based SHA-256) would make the app portable.
+- Long pause: if the manifest token expires the player errors once and the app re-tunes live (not resumed at the paused position).
 
 ## (Previous) RE status: COMPLETE and validated.
 
