@@ -2,9 +2,9 @@
 
 Last updated: 2026-11-09 (session 4). Read this first when resuming.
 
-## Status: native app works on the TV (v0.6)
+## Status: native app works on the TV (v0.7)
 
-Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kpn.slim`, label "KPN Slim"). Release APK about 1.2 MB. The git repo is local only (6 commits on `main`).
+Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kpn.slim`, label "KPN Slim"). Release APK about 1.2 MB. The git repo is local only (12 commits on `main`, including the one that updates this line).
 
 ### Build, install, setup
 - Build: `cd android && ./gradlew assembleRelease` (JDK 21 pinned in `gradle.properties`; Homebrew's default JDK 26 breaks Gradle 8.14).
