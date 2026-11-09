@@ -82,13 +82,23 @@ GET /CONTENT/VIDEOURL/LIVE/{channelId}/{assetId}?deviceId={deviceId}&profile=G09
 ```
 `profile=G09` ~ device/quality profile. `time` = current epoch millis (live). assetId 10 = SD_DASH_WV.
 
+## 4b. Catch-up (finished programmes)
+From the KPN web player (`getVideoUrl`) and verified on the Philips. The start-over stream above is clamped to about 6 h back (a request for 3 or 6 days ago returns the same manifest as 6 h ago), so older programmes use the recording:
+```
+GET /CONTENT/DETAIL/PROGRAM/{programId}
+→ resultObj.containers[0].assets[]: {assetId, programType "SOTV" | "CUTV", videoType "SD_DASH_WV", ...}
+GET /CONTENT/VIDEOURL/PROGRAM/{programId}/{CUTV assetId}?deviceId=..&profile=G09
+→ same shape as the live reply (DASH + Widevine)
+```
+`programId` is `metadata.contentId` of the EPG item; it needs `contentOptions` to contain `CATCHUP`. The `CUTV` manifest is `type="static"` and seekable. Its length is always the programme length plus 20 min (35 min programme: 55 min, 60 min: 1 h 20), the split before and after is not given. The `SOTV` asset gives a dynamic start-over style manifest. Worked 3 days back; the archive is about a week deep.
+
 ## 5. Playback / DRM
 - MPEG-DASH manifest (`.mpd`) from kpnstreaming.nl CDN; URL self-authorizes via `?token=`.
 - Widevine license: ExoPlayer/Media3 `MediaItem.DrmConfiguration(Widevine, licenseUri=licenseAcquisitionURL)`. License request is a standard Widevine POST (handled natively by MediaDrm). No extra header needed beyond the URL observed (license URL embeds its own auth path segments).
 
 ## Other useful endpoints (captured)
 - `GET /USER/PROFILE/`
-- `GET /TRAY/EPG?filter_startTime={ms}&filter_endTime={ms}&filter_channelIds={csv}&extendedChannelMetadata=true&outputFormat=EXTENDED`
+- `GET /TRAY/EPG?filter_startTime={ms}&filter_endTime={ms}&filter_channelIds={csv}&extendedChannelMetadata=true&outputFormat=EXTENDED` (any range, past included; returns every programme overlapping it, so one that straddles the start is included; 12 channels x 3 h is about 59 KB)
 - `GET /TRAY/SEARCH/PROGRAM?...filter_airingTime=now&filter_channelIds={csv}&outputFormat=EXTENDED` (now/next)
 - `GET /CONTENT/DETAIL/PROGRAM/{programId}`
 - `GET /CONTENT/USERDATA/LIVE/{channelId}?deviceId=...`

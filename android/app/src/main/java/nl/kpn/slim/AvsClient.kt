@@ -18,6 +18,8 @@ data class Channel(
 data class Stream(val manifestUrl: String, val licenseUrl: String?)
 
 data class Program(
+    /** AVS content id; catch-up playback is addressed by it. */
+    val id: Long,
     val title: String,
     val startMs: Long,
     val endMs: Long,
@@ -33,6 +35,8 @@ data class Program(
     val ageRating: Int = 0,
     /** The API flags whether this programme may be restarted from its beginning. */
     val startOver: Boolean = false,
+    /** The API flags whether this programme can be watched afterwards (catch-up). */
+    val catchUp: Boolean = false,
     /** Opaque artwork id; see [programImageUrl]. */
     val pictureId: String = "",
 ) {
@@ -99,15 +103,19 @@ class AvsClient(
     }
 
     /**
-     * Programs airing in the next [windowMs] for every channel, keyed by channelId and sorted by start.
-     * One call covers the whole lineup (~400 KB); the caller derives now/next from the times.
+     * Programs airing between [fromMs] and [toMs] (anything overlapping the range) for the given channels,
+     * keyed by channelId and sorted by start. The default is the next 3 h for the whole lineup (~400 KB); the
+     * TV guide asks for a handful of channels and a few hours at a time (~5 KB per channel and 3 h).
      */
     @Synchronized
-    fun epg(channels: List<Channel>, windowMs: Long = 3L * 3_600_000): Map<Int, List<Program>> {
-        val now = System.currentTimeMillis()
-        val ids = channels.joinToString(",") { it.id.toString() }
+    fun epg(
+        channelIds: List<Int>,
+        fromMs: Long = System.currentTimeMillis(),
+        toMs: Long = fromMs + 3L * 3_600_000,
+    ): Map<Int, List<Program>> {
+        val ids = channelIds.joinToString(",")
         val json = authed {
-            get("$base/TRAY/EPG?filter_startTime=$now&filter_endTime=${now + windowMs}" +
+            get("$base/TRAY/EPG?filter_startTime=$fromMs&filter_endTime=$toMs" +
                 "&filter_channelIds=$ids&outputFormat=EXTENDED")
         }
         val rows = json.getJSONObject("resultObj").optJSONArray("containers") ?: return emptyMap()
@@ -122,7 +130,9 @@ class AvsClient(
                 val title = md.optString("title")
                 val start = md.optLong("airingStartTime")
                 val end = md.optLong("airingEndTime")
+                val options = md.strings("contentOptions")
                 if (title.isEmpty() || end <= start) null else Program(
+                    id = md.optLong("contentId"),
                     title = title,
                     startMs = start,
                     endMs = end,
@@ -136,7 +146,8 @@ class AvsClient(
                     directors = md.strings("directors"),
                     actors = md.strings("actors"),
                     ageRating = md.optInt("pcLevel"),
-                    startOver = md.strings("contentOptions").contains("STARTOVER"),
+                    startOver = "STARTOVER" in options,
+                    catchUp = "CATCHUP" in options,
                     pictureId = md.optString("pictureUrl"),
                 )
             }.sortedBy { it.startMs }
@@ -152,6 +163,29 @@ class AvsClient(
         val json = authed {
             get("$base/CONTENT/VIDEOURL/LIVE/${ch.id}/${ch.assetId}?deviceId=$deviceId&profile=G09&time=$time")
         }
+        return streamOf(json)
+    }
+
+    /**
+     * Catch-up: plays a finished programme from the recording. The programme detail lists its assets; the
+     * `CUTV` one is a static manifest (seekable, 20 min longer than the programme: the recording runs a little
+     * before and after), the `SOTV` one is the live-style start-over stream. Same play-URL call as live otherwise.
+     */
+    @Synchronized
+    fun catchUpStream(p: Program): Stream {
+        val detail = authed { get("$base/CONTENT/DETAIL/PROGRAM/${p.id}") }
+        val assets = detail.getJSONObject("resultObj").getJSONArray("containers").getJSONObject(0).optJSONArray("assets")
+        val list = (0 until (assets?.length() ?: 0)).map { assets!!.getJSONObject(it) }
+        val asset = list.firstOrNull { it.optString("programType") == "CUTV" }
+            ?: list.firstOrNull { it.optString("programType") != "SOTV" }
+            ?: throw AvsException("Catch-up is not available for this programme")
+        val json = authed {
+            get("$base/CONTENT/VIDEOURL/PROGRAM/${p.id}/${asset.getLong("assetId")}?deviceId=$deviceId&profile=G09")
+        }
+        return streamOf(json)
+    }
+
+    private fun streamOf(json: JSONObject): Stream {
         val sources = json.getJSONObject("resultObj").getJSONObject("src").getJSONObject("sources")
         val license = sources.optJSONObject("contentProtection")
             ?.optJSONObject("widevine")

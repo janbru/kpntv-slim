@@ -1,10 +1,10 @@
 # KPN TV+ slim: project state & next steps
 
-Last updated: 2026-11-09 (session 5). Read this first when resuming.
+Last updated: 2026-11-09 (session 6). Read this first when resuming.
 
-## Status: native app works on the TV (v0.8)
+## Status: native app works on the TV (v0.9)
 
-Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kpn.slim`, label "KPN Slim"). Release APK about 1.2 MB. The git repo is local only (16 commits on `main`, including the one that updates this line). New in v0.8 (session 5): one-time sign-in with abonnementsnummer + pincode (no more hardcoded deviceId), new icon and banner, in-app hint pill, Settings row with icon in the channel list.
+Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kpn.slim`, label "KPN Slim"). Release APK about 1.2 MB. The git repo is local only (17 commits on `main`, plus the one that updates this line). New in v0.9 (session 6): a full TV guide grid and catch-up of earlier programmes, the buffering spinner now waits 1.5 s. New in v0.8 (session 5): one-time sign-in with abonnementsnummer + pincode (no more hardcoded deviceId), new icon and banner, in-app hint pill, Settings row with icon in the channel list.
 
 ### Build, install, setup
 - Build: `cd android && ./gradlew assembleRelease` (JDK 21 pinned in `gradle.properties`; Homebrew's default JDK 26 breaks Gradle 8.14). To build without the optional account/deviceId seed (what a fresh user gets, and what is on the TV now): add `-Pkpn.account= -Pkpn.deviceId=`.
@@ -16,8 +16,9 @@ Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kp
 
 ### Code map (`android/app/src/main/java/nl/kpn/slim/`)
 - `Identity.kt`: `Identity` (account + deviceId) and `IdentityStore` (SharedPreferences `slim`: `account`, `deviceId`; falls back to the optional BuildConfig seed; `newDeviceId()` makes a random 64-hex SHA-256 id).
-- `AvsClient.kt`: EAR, SESSIONS, LIVECHANNELS, VIDEOURL, EPG, and `register(pin)` for the one-time sign-in. A refused session throws `AuthException`. `HttpURLConnection` + `org.json`, cookie/xsrf rotation, 3 h session refresh, retry once. `Program` carries `pictureId`, description, genres, cast, year, age rating, `startOver` flag.
-- `Epg.kt`: in-memory guide. `now/next(channelId, at)`, refresh every 15 min, merges refreshes and keeps programmes that ended up to 6 h ago.
+- `AvsClient.kt`: EAR, SESSIONS, LIVECHANNELS, VIDEOURL, EPG, and `register(pin)` for the one-time sign-in. A refused session throws `AuthException`. `HttpURLConnection` + `org.json`, cookie/xsrf rotation, 3 h session refresh, retry once. `Program` carries `id`, `pictureId`, description, genres, cast, year, age rating, `startOver` and `catchUp` flags. `epg(channelIds, from, to)` takes any channels and range; `catchUpStream(program)` plays a finished programme.
+- `Epg.kt`: in-memory guide. `now/next(channelId, at)`, `programs(channelId)`; `replace` (the 15 min now/next refresh) and `merge` never drop anything, `trim(from, to)` does (called when the guide closes and after a refresh, always keeping what the player shows). `claimMissing/release` track which (channel, 3 h slot) pairs the guide already requested.
+- `GuideView.kt`: the TV guide grid, one custom `View` drawn on a canvas (no per-cell views). Owns selection, scrolling and drawing; `MainActivity` owns data and playback (`GuideView.Listener`, `ensureGuideData()`).
 - `MainActivity.kt`: everything UI. ExoPlayer DASH + Widevine, zapping, overlays (list, options menu, info panel, settings, banner, sign-in panel, hint pill), pause, start over, stream info. Start-up picks the identity (`IdentityStore.load`): stored or seeded identity loads channels, none shows the sign-in.
 - `ChannelAdapter.kt`: channel list, first row is "Settings" with the app icon (`list_icon.png`). The icon follows the logos setting so the label always lines up with the channel names: logos on, the icon sits in the 80dp logo column; logos off (channel rows then have no logo column), it takes the 48dp number column, left-aligned, with no end margin. `LogoLoader.kt`: image loader for logos and programme artwork (byte-capped 12 MB LRU, 4 parallel downloads, hides the view when there is no image).
 - Layout: `res/layout/activity_main.xml` holds all overlays (sign-in `login`, hint pill `hint`, and the rest). `item_channel.xml` / `item_settings.xml` are the list rows. Colours in `res/values/colors.xml`, field style `LoginField` in `themes.xml`.
@@ -42,9 +43,10 @@ Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kp
 - Up/Down or CH+/CH-: zap. Digits: channel number. Last channel: previous channel.
 - **OK: options menu** (Pause/Play, Start from beginning, Go to live when behind, Programme info, Channel list, Settings).
 - Right or Info: show the bottom banner; press again while it shows to open the options menu.
-- Menu, Left, Guide: channel list (its first row, with the app icon, opens Settings).
+- Menu, Left: channel list (its first row, with the app icon, opens Settings). **Guide: TV guide** (also "TV guide" in the options menu).
+- **TV guide keys**: Left/Right previous/next programme, Up/Down other channel (same time), CH+/CH- (or page keys) a page of channels, fast forward / rewind 3 h, Red back to now, OK watch (on now: tune live; finished: start-over or catch-up; not aired: info), Info/Green details, Back/Menu/Guide close. Play/pause/stop keep working.
 - Play/Pause, Pause, Play media keys (and Space): pause. Red: start over (also inside the info panel). Green: programme info.
-- Fast forward / Rewind media keys (also skip/step keys): seek. 10 s, and quick repeats (within 1.5 s) step up 30 s, 1 min, 2 min, 5 min. Forward past the live edge lands on live.
+- Fast forward / Rewind media keys (also skip/step keys): seek (in the TV guide they page through time instead). 10 s, and quick repeats (within 1.5 s) step up 30 s, 1 min, 2 min, 5 min. Forward past the live edge lands on live.
 - Stop: back to live (instant seek to the live edge on a plain live stream, re-tune after start over). When already live it only says "You are watching live TV".
 - **Leave-guard**: while not live (paused, behind live, or started over: `nonLive()`), every action that leaves the current stream needs the same key/action twice within 2.5 s, otherwise it only shows a hint ("Not live. Press again to change channel"). Implemented once in `guard(key, msg, action)`. Guarded: channel up/down and CH+/-, last channel, typed channel number (type it again), picking a channel in the list, start from beginning (red, options row, info button), Go to live (Stop, options row), the High bandwidth setting (restarts the stream). Key auto-repeat never confirms. While live nothing is guarded. Not guarded on purpose: fast forward and rewind (they stay in the same stream; forward past the live edge just lands on live), pause/play, and the initial tune on app start. Exit via Back is always a double press.
 - Back: close the open overlay; with no overlay the first press shows a "Press back again to exit" hint (pill with the app icon, 2 s) and a second press within 2 s exits the app. While the sign-in panel is up, every key belongs to the form except Back, which keeps the double press to exit.
@@ -56,8 +58,14 @@ Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kp
 - **Start from beginning**: no extra endpoint. `VIDEOURL/LIVE/{ch}/{asset}?time={programStartMs}` (exact ms, not rounded) returns a manifest that begins at that moment (URL carries `&t=<ISO>`). The window reaches back about 6 h (tested 10 min to 3 days, older is clamped). Played with `setMediaItem(item, 0)`. Only offered when the programme has `contentOptions: STARTOVER`. While not live: banner and info panel describe the programme being played (`timeshiftBase + currentPosition`), the clock shows `(-N min)`, "Go to live" appears. "Behind live" is measured against ExoPlayer's target live offset, so plain live never counts as behind.
 - **Pause**: pause icon top right with the time behind live next to it (`-0:14`, updated twice a second). Live pause works because the dynamic manifest has a long window. The banner clock also shows `(-28 s)` / `(-N min)` when behind.
 - **Stream info fade**: the video info in the banner fades in over 0.7 s when it first appears for a new stream (not on later quality changes, those glow instead).
-- **Buffering spinner**: ExoPlayer's own one is off; a green spinner appears only after 1 s of continuous tuning/buffering (`armLoader`, `LOADER_DELAY_MS`), so quick zaps stay clean.
+- **Buffering spinner**: ExoPlayer's own one is off; a green spinner appears only after 1.5 s of continuous tuning/buffering (`armLoader`, `LOADER_DELAY_MS`), so quick zaps stay clean.
 - **Programme info panel**: a "Start from beginning" button at the bottom (only when the programme allows it, focused by default; Up moves focus to the text, which scrolls). Title, season/episode, episode title, channel, time and length, genres, year, age rating, description, presenters/directors/cast.
+- **TV guide and catch-up** (session 6, verified on the TV): a grid of channels (rows) by time (3 h visible, half-hour ticks, green "now" line, 8 rows plus a detail footer). Data loads lazily: only the visible channels plus 4 above and below, and the visible time plus one 3 h slot each side, in 3 h requests (about 5 KB per channel and slot, versus 400 KB for the whole lineup). It scrolls a week back and forward. Past programmes show a replay mark when they can be watched, dimmed when not. Moving between rows leaves the time axis alone.
+  - **Two ways to play a finished programme** (`watchProgramme`): within about 5.5 h (`START_OVER_REACH_MS`) the start-over stream with `time=` the programme start (exact start, carries on into what followed, same as the Red key); older, the catch-up recording (`CONTENT/DETAIL/PROGRAM/{id}` for the `CUTV` asset, then `VIDEOURL/PROGRAM/{id}/{asset}`; see API_CONTRACT.md section 4b). The start-over stream is clamped to about 6 h, so it cannot do older ones.
+  - The catch-up recording is a static, seekable DASH manifest that is always 20 min longer than the programme. How that is split before and after is not in the API; playback starts at position 0 (`CATCHUP_LEAD_MS = 0`, the user checked that this is fine), and the banner's time mapping (`timeshiftBase + position`) uses the same constant. When a catch-up programme ends the next one continues if it is also catch-up, else the app goes live.
+  - Banner and pause clock show how far behind: seconds, minutes, `-N h M min`, or days.
+  - Screenshots of catch-up video come out black (secure decoder `OMX.MTK.VIDEO.DECODER.AVC.secure`); the banner and overlays are fine. Live video screenshots work.
+  - Info panel (Info/Green in the guide) works for any programme; its button reads "Start from beginning" (on now) or "Watch from beginning" (finished) and appears only when it can be played.
 - **Settings** (SharedPreferences `slim`): "High bandwidth start" (default Off) gives ExoPlayer a 20 Mbps initial bandwidth estimate so playback starts at 1080p50 / 8 Mbps instead of ramping up from 768x432. Only matters on a cold start, because the shared bandwidth meter remembers its estimate afterwards. "Show channel logos" (default On; list rows and banner). "Info banner duration" 1-15 s (default 5). Toggling the first one rebuilds the player and re-tunes.
 - The TV currently has High bandwidth start **On**, Show channel logos **Off** and banner **9 s** (the user's own choices; the logos-off layout is the one the Settings row alignment was tuned on, and both modes were checked).
 
@@ -82,8 +90,7 @@ Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kp
 
 ### Known gaps / next ideas
 - Audio and subtitle track picker (manifest has a second Dutch audio track and a Dutch subtitle stream; ExoPlayer picks defaults).
-- Catch-up of earlier programmes and a full EPG grid (the `TRAY/EPG` endpoint takes any time range; start-over proves play URLs accept past times).
-- Artwork in the channel list rows (small programme thumbnail) or a grid-style EPG.
+- TV guide ideas: channel logos in the grid (the logos setting is ignored there), jump to a channel by number, jump to a day, a search, reminders. Programme artwork in the list rows.
 - Recordings/CPVR, out-of-home, trick-play thumbnails while scrubbing (no seeking UI yet).
 - Sign-in works (see Sign-in). Missing: a sign-out / switch account entry in Settings, a device limit check or cleanup via `USER/DEVICES`, and handling an `AuthException` that happens mid-session (it only shows the player error; restarting the app brings up the sign-in).
 - Long pause: if the manifest token expires the player errors once and the app re-tunes live (not resumed at the paused position).

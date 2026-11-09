@@ -135,6 +135,13 @@
         android:paddingVertical="24dp"
         android:visibility="gone" />
 
+    <!-- TV guide grid (Guide key, or "TV guide" in the options menu) -->
+    <nl.kpn.slim.GuideView
+        android:id="@+id/guide"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
     <!-- Paused indicator with how far behind live we are -->
     <LinearLayout
         android:id="@+id/paused"
@@ -193,6 +200,11 @@
             android:id="@+id/row_info"
             style="@style/OptionRow"
             android:text="Programme info" />
+
+        <TextView
+            android:id="@+id/row_guide"
+            style="@style/OptionRow"
+            android:text="TV guide" />
 
         <TextView
             android:id="@+id/row_channels"

@@ -64,6 +64,7 @@ class MainActivity : Activity(), LifecycleOwner {
 
     private lateinit var playerView: PlayerView
     private lateinit var list: RecyclerView
+    private lateinit var guide: GuideView
     private lateinit var osd: View
     private lateinit var osdNumber: TextView
     private lateinit var osdName: TextView
@@ -83,7 +84,7 @@ class MainActivity : Activity(), LifecycleOwner {
     private lateinit var rowLive: View
     private lateinit var info: View
     private lateinit var infoScroll: View
-    private lateinit var infoStartOver: View
+    private lateinit var infoStartOver: TextView
     private lateinit var osdLogo: ImageView
     private lateinit var infoImage: ImageView
     private lateinit var infoTitle: TextView
@@ -129,9 +130,22 @@ class MainActivity : Activity(), LifecycleOwner {
     private var glowKeys: Set<String> = emptySet()
     private var streamAnim: ValueAnimator? = null
 
-    /** Wall-clock start of the stream when watching a started-over programme; null when live. */
+    /**
+     * Wall-clock moment of playback position 0 when not watching live (a started-over programme, or catch-up);
+     * null when live. [timeshiftStartPos] is where playback begins in that stream (catch-up starts a little in,
+     * after the recording's lead-in).
+     */
     private var timeshiftBase: Long? = null
+    private var timeshiftStartPos = 0L
     private var timeshiftReady = false
+
+    /** What is playing, so a retry after an error (expired token) keeps watching the same thing. */
+    private var curStartOver: Long? = null
+    private var curCatchUp: Program? = null
+
+    /** The programme the info panel shows (it can belong to any channel, when opened from the TV guide). */
+    private var infoChIdx = -1
+    private var infoProg: Program? = null
 
     private val prefs by lazy { getSharedPreferences("slim", MODE_PRIVATE) }
 
@@ -165,6 +179,8 @@ class MainActivity : Activity(), LifecycleOwner {
 
         playerView = findViewById(R.id.player_view)
         list = findViewById(R.id.channel_list)
+        guide = findViewById(R.id.guide)
+        guide.listener = guideListener
         osd = findViewById(R.id.osd)
         osdNumber = findViewById(R.id.osd_number)
         osdName = findViewById(R.id.osd_name)
@@ -185,7 +201,7 @@ class MainActivity : Activity(), LifecycleOwner {
         info = findViewById(R.id.info)
         infoScroll = findViewById(R.id.info_scroll)
         infoStartOver = findViewById(R.id.info_startover)
-        infoStartOver.setOnClickListener { startOver() }
+        infoStartOver.setOnClickListener { startOver(infoChIdx, infoProg) }
         osdLogo = findViewById(R.id.osd_logo)
         infoImage = findViewById(R.id.info_image)
         infoTitle = findViewById(R.id.info_title)
@@ -197,6 +213,7 @@ class MainActivity : Activity(), LifecycleOwner {
         rowStartOver.setOnClickListener { startOver() }
         rowLive.setOnClickListener { guard("live", "Not live. Press OK again to return to live TV") { hideOptions(); goLive() } }
         findViewById<View>(R.id.row_info).setOnClickListener { hideOptions(); showInfo() }
+        findViewById<View>(R.id.row_guide).setOnClickListener { hideOptions(); showGuide() }
         findViewById<View>(R.id.row_channels).setOnClickListener { hideOptions(); showList() }
         findViewById<View>(R.id.row_settings).setOnClickListener { hideOptions(); showSettings() }
         settings = findViewById(R.id.settings)
@@ -298,14 +315,22 @@ class MainActivity : Activity(), LifecycleOwner {
 
     // ---- tuning ----
 
-    private fun tune(index: Int, debounce: Boolean = true, startOverAt: Long? = null) {
+    /**
+     * Plays channel [index]: live by default, from a programme start with [startOverAt] (the stream's window is
+     * about 6 h deep), or a finished programme from the recording with [catchUp].
+     */
+    private fun tune(index: Int, debounce: Boolean = true, startOverAt: Long? = null, catchUp: Program? = null) {
         if (channels.isEmpty()) return
         val i = Math.floorMod(index, channels.size)
         if (i != current) { previous = current; retriedCurrent = false }
         current = i
-        timeshiftBase = startOverAt
+        curStartOver = startOverAt
+        curCatchUp = catchUp
+        timeshiftBase = startOverAt ?: catchUp?.let { it.startMs - CATCHUP_LEAD_MS }
+        timeshiftStartPos = if (catchUp != null) CATCHUP_LEAD_MS else 0L
         timeshiftReady = false
         adapter?.playingIndex = i
+        guide.playingIndex = i
         val ch = channels[i]
         prefs.edit().putInt("lastChannelId", ch.id).apply()
         showOsd(ch)
@@ -319,7 +344,9 @@ class MainActivity : Activity(), LifecycleOwner {
             p.stop()
             p.playWhenReady = true
             setPausedIndicator(false)
-            val stream = withContext(Dispatchers.IO) { runCatching { avs.liveStream(ch, startOverAt) } }
+            val stream = withContext(Dispatchers.IO) {
+                runCatching { if (catchUp != null) avs.catchUpStream(catchUp) else avs.liveStream(ch, startOverAt) }
+            }
             stream.onSuccess { s ->
                 hideStatus()
                 val item = MediaItem.Builder()
@@ -334,11 +361,12 @@ class MainActivity : Activity(), LifecycleOwner {
                     }
                     .build()
                 // Start over: the manifest begins at the programme start, so position 0 is that moment.
+                // Catch-up: the recording starts CATCHUP_LEAD_MS before the programme.
                 // A different stream starts here: its first values must not glow against the previous stream's.
                 lastParts = emptyMap()
                 glowKeys = emptySet()
                 streamAnim?.cancel()
-                if (startOverAt != null) p.setMediaItem(item, 0L) else p.setMediaItem(item)
+                if (timeshiftBase != null) p.setMediaItem(item, timeshiftStartPos) else p.setMediaItem(item)
                 p.playWhenReady = true
                 setPausedIndicator(false)
                 p.prepare()
@@ -357,7 +385,7 @@ class MainActivity : Activity(), LifecycleOwner {
             // Manifest tokens / licenses expire: fetch a fresh play URL once before giving up.
             if (!retriedCurrent && current >= 0) {
                 retriedCurrent = true
-                tune(current, debounce = false)
+                tune(current, debounce = false, startOverAt = curStartOver, catchUp = curCatchUp)
             } else {
                 hideLoader()
                 showStatus("Playback error: ${error.errorCodeName}")
@@ -371,6 +399,7 @@ class MainActivity : Activity(), LifecycleOwner {
             when (state) {
                 Player.STATE_READY -> { retriedCurrent = false; timeshiftReady = true; hideStatus(); hideLoader() }
                 Player.STATE_BUFFERING -> armLoader()
+                Player.STATE_ENDED -> catchUpEnded()
                 else -> Unit
             }
         }
@@ -389,6 +418,12 @@ class MainActivity : Activity(), LifecycleOwner {
             return super.dispatchKeyEvent(event)
         }
 
+        // The TV guide takes the navigation keys, fast forward and rewind (they page through time there).
+        // Play/pause and stop keep working; the programme info panel on top of it takes its own keys below.
+        if (guide.visibility == View.VISIBLE && info.visibility != View.VISIBLE && code !in GUIDE_PASS_KEYS) {
+            return guide.onKey(code) || super.dispatchKeyEvent(event)
+        }
+
         when (code) {
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_SPACE -> { togglePause(); return true }
             KeyEvent.KEYCODE_MEDIA_PAUSE -> { setPaused(true); return true }
@@ -401,7 +436,7 @@ class MainActivity : Activity(), LifecycleOwner {
         if (info.visibility == View.VISIBLE) {
             when (code) {
                 KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_PROG_GREEN -> hideInfo()
-                KeyEvent.KEYCODE_PROG_RED -> startOver()
+                KeyEvent.KEYCODE_PROG_RED -> startOver(infoChIdx, infoProg)
                 else -> return super.dispatchKeyEvent(event) // up/down scroll the text, OK presses the button
             }
             return true
@@ -444,8 +479,11 @@ class MainActivity : Activity(), LifecycleOwner {
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
                 if (channels.isEmpty()) loadChannels() else showOptions()
             }
-            KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_GUIDE -> {
+            KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_DPAD_LEFT -> {
                 if (channels.isEmpty()) loadChannels() else showList()
+            }
+            KeyEvent.KEYCODE_GUIDE -> {
+                if (channels.isEmpty()) loadChannels() else showGuide()
             }
             KeyEvent.KEYCODE_LAST_CHANNEL -> if (previous >= 0) {
                 guard("last", "Not live. Press again to change channel") { tune(previous, debounce = false) }
@@ -621,21 +659,65 @@ class MainActivity : Activity(), LifecycleOwner {
      * start, so it is that start plus the playback position; before the first frame the position is stale.
      */
     private fun playedAt(): Long {
-        timeshiftBase?.let { base -> return base + if (timeshiftReady) (player?.currentPosition ?: 0L) else 0L }
+        timeshiftBase?.let { base -> return base + if (timeshiftReady) (player?.currentPosition ?: 0L) else timeshiftStartPos }
         return System.currentTimeMillis() - secondsBehindLive() * 1000
     }
 
-    private fun startOver() {
+    /**
+     * Start a programme from its beginning: [prog] on channel [idx], by default what is on screen right now.
+     * See [watchProgramme] for how that is played.
+     */
+    private fun startOver(idx: Int = current, prog: Program? = epg.now(channels.getOrNull(idx)?.id ?: -1, playedAt())) {
+        if (prog == null) { dismissPanels(); notice("No programme information for this channel"); return }
+        val now = System.currentTimeMillis()
+        if (prog.startMs > now) { dismissPanels(); notice("This programme has not started yet"); return }
+        if (!canWatchFromStart(prog)) {
+            dismissPanels()
+            notice(if (prog.endMs > now) "Start from beginning is not available for this programme"
+            else "Catch-up is not available for this programme")
+            return
+        }
+        guard("watch:${prog.id}", "Not live. Press again to restart the programme") {
+            dismissPanels()
+            watchProgramme(idx, prog)
+            hideGuide() // after: trimming keeps what is being played, and that is only known once tune() ran
+        }
+    }
+
+    /** Whether [prog] has started and can be played from its beginning, as start-over or as catch-up. */
+    private fun canWatchFromStart(prog: Program): Boolean {
+        val now = System.currentTimeMillis()
+        return prog.startMs <= now && (startOverReachable(prog) || (prog.endMs <= now && prog.catchUp))
+    }
+
+    /** The live-style start-over stream only reaches about 6 h back; the margin keeps clear of that edge. */
+    private fun startOverReachable(prog: Program) =
+        prog.startOver && prog.startMs >= System.currentTimeMillis() - START_OVER_REACH_MS
+
+    /**
+     * Plays [prog] from its start. Recent programmes use the start-over stream (exact start, carries on into what
+     * followed); older ones the catch-up recording. The caller has checked [canWatchFromStart].
+     */
+    private fun watchProgramme(idx: Int, prog: Program) {
+        if (startOverReachable(prog)) {
+            tune(idx, debounce = false, startOverAt = prog.startMs)
+            notice(if (prog.endMs > System.currentTimeMillis()) "Restarting: ${prog.title}" else "Replay: ${prog.title}")
+        } else {
+            tune(idx, debounce = false, catchUp = prog)
+            notice("Catch-up: ${prog.title}")
+        }
+    }
+
+    /** A catch-up recording played to its end: carry on with the next programme if it is also catch-up, else live. */
+    private fun catchUpEnded() {
+        val shown = curCatchUp ?: return
         val ch = channels.getOrNull(current) ?: return
-        val prog = epg.now(ch.id, playedAt())
-        when {
-            prog == null -> { dismissPanels(); notice("No programme information for this channel") }
-            !prog.startOver -> { dismissPanels(); notice("Start from beginning is not available for this programme") }
-            else -> guard("startover", "Not live. Press again to restart the programme") {
-                dismissPanels()
-                tune(current, debounce = false, startOverAt = prog.startMs)
-                notice("Restarting: ${prog.title}")
-            }
+        val next = epg.next(ch.id, shown.startMs)
+        if (next != null && next.endMs <= System.currentTimeMillis() && next.catchUp) {
+            watchProgramme(current, next)
+        } else {
+            tune(current, debounce = false)
+            notice("End of catch-up, back to live")
         }
     }
 
@@ -667,10 +749,79 @@ class MainActivity : Activity(), LifecycleOwner {
         if (epgJob?.isActive == true || channels.isEmpty()) return
         epgJob = lifecycleScope.launch {
             val snapshot = channels
-            val data = withContext(Dispatchers.IO) { runCatching { avs.epg(snapshot) }.getOrNull() } ?: return@launch
+            val data = withContext(Dispatchers.IO) { runCatching { avs.epg(snapshot.map { it.id }) }.getOrNull() } ?: return@launch
             epg.replace(data)
+            if (guide.visibility != View.VISIBLE) trimEpg()
             adapter?.notifyDataSetChanged()
             channels.getOrNull(current)?.let { bindGuide(it) }
+        }
+    }
+
+    /**
+     * Drops guide data nobody needs: older than 6 h (what start-over can reach), further ahead than 12 h, but
+     * always keeping what the player is showing, since a catch-up programme is days old.
+     */
+    private fun trimEpg() {
+        val now = System.currentTimeMillis()
+        epg.trim(minOf(now - 6 * 3_600_000, playedAt() - 3_600_000), now + 12 * 3_600_000)
+    }
+
+    // ---- TV guide ----
+
+    private val guideListener = object : GuideView.Listener {
+        override fun onWatch(row: Int, program: Program?) {
+            val now = System.currentTimeMillis()
+            when {
+                // Nothing known, or on now: just tune to the channel.
+                program == null || (program.startMs <= now && program.endMs > now) ->
+                    guard("ch:$row", "Not live. Press OK again to change channel") { tune(row, debounce = false); hideGuide() }
+                program.startMs > now -> showInfo(row, program)
+                canWatchFromStart(program) ->
+                    guard("watch:${program.id}", "Not live. Press OK again to watch this programme") {
+                        watchProgramme(row, program); hideGuide()
+                    }
+                else -> notice("Not available: this programme can no longer be watched")
+            }
+        }
+
+        override fun onInfo(row: Int, program: Program) = showInfo(row, program)
+        override fun onClose() = hideGuide()
+        override fun onMoved() = ensureGuideData()
+    }
+
+    private fun showGuide() {
+        osd.visibility = View.GONE
+        guide.open(channels, epg, current.coerceAtLeast(0), current)
+        guide.visibility = View.VISIBLE
+        ensureGuideData()
+    }
+
+    private fun hideGuide() {
+        if (guide.visibility != View.VISIBLE) return
+        guide.visibility = View.GONE
+        trimEpg()
+    }
+
+    /** Loads the programmes around the visible part of the guide that are not in memory yet. */
+    private fun ensureGuideData() {
+        if (guide.visibility != View.VISIBLE || channels.isEmpty()) return
+        val first = (guide.firstVisibleRow - GUIDE_ROW_MARGIN).coerceAtLeast(0)
+        val last = (guide.firstVisibleRow + guide.visibleRows + GUIDE_ROW_MARGIN).coerceAtMost(channels.size - 1)
+        val ids = (first..last).map { channels[it].id }
+        val missing = epg.claimMissing(ids, guide.windowStart - Epg.SLOT_MS, guide.windowEnd + Epg.SLOT_MS)
+        if (missing.isEmpty()) return
+        // Nearest to what is on screen first.
+        val centre = Math.floorDiv(guide.windowStart + (guide.windowEnd - guide.windowStart) / 2, Epg.SLOT_MS)
+        val slots = missing.keys.sortedBy { Math.abs(it - centre) }
+        lifecycleScope.launch {
+            for (slot in slots) {
+                val chIds = missing.getValue(slot)
+                val from = slot * Epg.SLOT_MS
+                val data = withContext(Dispatchers.IO) { runCatching { avs.epg(chIds, from, from + Epg.SLOT_MS) }.getOrNull() }
+                if (data == null) { epg.release(slot, chIds); continue }
+                epg.merge(data)
+                guide.dataChanged()
+            }
         }
     }
 
@@ -704,9 +855,11 @@ class MainActivity : Activity(), LifecycleOwner {
         options.visibility = View.GONE
     }
 
-    private fun showInfo() {
-        val ch = channels.getOrNull(current) ?: return
-        val prog = epg.now(ch.id, playedAt())
+    /** Programme info for [prog] on channel [idx]; by default what is on screen right now. */
+    private fun showInfo(idx: Int = current, prog: Program? = epg.now(channels.getOrNull(idx)?.id ?: -1, playedAt())) {
+        val ch = channels.getOrNull(idx) ?: return
+        infoChIdx = idx
+        infoProg = prog
         osd.visibility = View.GONE
         logos.load(prog?.imageUrl(INFO_IMAGE_W, INFO_IMAGE_H), infoImage)
         infoTitle.text = prog?.title ?: ch.name
@@ -739,10 +892,12 @@ class MainActivity : Activity(), LifecycleOwner {
             infoCredits.visibility = if (infoCredits.text.isEmpty()) View.GONE else View.VISIBLE
         }
         infoScroll.scrollTo(0, 0)
-        infoStartOver.visibility = if (prog?.startOver == true) View.VISIBLE else View.GONE
+        val canStart = prog != null && canWatchFromStart(prog)
+        infoStartOver.text = if (prog != null && prog.endMs <= System.currentTimeMillis()) "Watch from beginning" else "Start from beginning"
+        infoStartOver.visibility = if (canStart) View.VISIBLE else View.GONE
         info.visibility = View.VISIBLE
         // The button is the default focus when offered; Up moves to the text, which then scrolls.
-        (if (prog?.startOver == true) infoStartOver else infoScroll).requestFocus()
+        (if (canStart) infoStartOver else infoScroll).requestFocus()
     }
 
     private fun hideInfo() {
@@ -890,10 +1045,11 @@ class MainActivity : Activity(), LifecycleOwner {
         val at = playedAt()
         val now = ch?.let { epg.now(it.id, at) }
         val next = ch?.let { epg.next(it.id, at) }
-        val behindMin = secondsBehindLive() / 60
         val behindSec = secondsBehindLive()
         osdClock.text = epg.time(System.currentTimeMillis()) + when {
-            behindMin >= 1 -> "  (-$behindMin min)"
+            behindSec >= 2 * 86_400 -> "  (-${behindSec / 86_400} days)"
+            behindSec >= 2 * 3_600 -> "  (-${behindSec / 3_600} h ${behindSec / 60 % 60} min)"
+            behindSec >= 60 -> "  (-${behindSec / 60} min)"
             behindSec >= 3 -> "  (-$behindSec s)"
             else -> ""
         }
@@ -963,8 +1119,21 @@ class MainActivity : Activity(), LifecycleOwner {
     companion object {
         private const val MIN_BANNER_S = 1
         private const val MAX_BANNER_S = 15
-        private const val LOADER_DELAY_MS = 1000L
+        private const val LOADER_DELAY_MS = 1500L
         private const val EXIT_WINDOW_MS = 2000L
+        /** The start-over stream reaches back about 6 h; stay a little inside that. */
+        private const val START_OVER_REACH_MS = 5L * 3_600_000 + 30 * 60_000
+        /**
+         * A catch-up recording is 20 min longer than its programme (the API does not say how that is split).
+         * Playback starts at position 0, which the user found fine; raise this to start later in the recording.
+         */
+        private const val CATCHUP_LEAD_MS = 0L
+        /** The guide loads this many channels above and below what is visible. */
+        private const val GUIDE_ROW_MARGIN = 4
+        private val GUIDE_PASS_KEYS = setOf(
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE,
+            KeyEvent.KEYCODE_MEDIA_STOP, KeyEvent.KEYCODE_SPACE,
+        )
         private const val GUARD_MS = 2500L
         private const val STREAM_FADE_MS = 700L
         private const val SEEK_REPEAT_MS = 1500L
