@@ -57,7 +57,7 @@
                 android:ellipsize="end"
                 android:gravity="end"
                 android:maxLines="1"
-                android:textColor="#B3FFFFFF"
+                android:textColor="@color/stream_dim"
                 android:textSize="12sp" />
 
             <TextView

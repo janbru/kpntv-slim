@@ -1,7 +1,14 @@
 package nl.kpn.slim
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ArgbEvaluator
+import android.animation.ValueAnimator
 import android.app.Activity
 import android.os.Bundle
+import android.text.Spannable
+import android.text.SpannableStringBuilder
+import android.text.style.ForegroundColorSpan
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
@@ -91,6 +98,13 @@ class MainActivity : Activity(), LifecycleOwner {
     private var digits = ""
     private var retriedCurrent = false
     private var noticeJob: Job? = null
+
+    // Stream info glow: last shown pieces (key to text), the pieces currently glowing, and the running fade.
+    private var streamVideo: List<Pair<String, String>> = emptyList()
+    private var streamAudio: List<Pair<String, String>> = emptyList()
+    private var lastParts: Map<String, String> = emptyMap()
+    private var glowKeys: Set<String> = emptySet()
+    private var streamAnim: ValueAnimator? = null
 
     /** Wall-clock start of the stream when watching a started-over programme; null when live. */
     private var timeshiftBase: Long? = null
@@ -257,6 +271,10 @@ class MainActivity : Activity(), LifecycleOwner {
                     }
                     .build()
                 // Start over: the manifest begins at the programme start, so position 0 is that moment.
+                // A different stream starts here: its first values must not glow against the previous stream's.
+                lastParts = emptyMap()
+                glowKeys = emptySet()
+                streamAnim?.cancel()
                 if (startOverAt != null) p.setMediaItem(item, 0L) else p.setMediaItem(item)
                 p.playWhenReady = true
                 setPausedIndicator(false)
@@ -569,32 +587,82 @@ class MainActivity : Activity(), LifecycleOwner {
         osdJob = lifecycleScope.launch { delay(bannerSeconds * 1000L); osd.visibility = View.GONE }
     }
 
-    /** "HD 1920x1080 · 50 fps · H.264 · 8.0 Mbps   |   NL · AC-3 5.1 · 384 kbps" for what is actually playing. */
+    /**
+     * "HD 1920x1080 · 50 fps · H.264 · 8.0 Mbps   |   NL · AC-3 5.1 · 384 kbps" for what is actually playing.
+     * Each piece has a key; when a piece changes while the same stream keeps playing (adaptive quality switch),
+     * it glows green and fades back to the dim base colour.
+     */
     private fun bindStream() {
         val p = player
-        osdStream.text = if (p == null) "" else listOfNotNull(videoInfo(p.videoFormat), audioInfo(p.audioFormat))
-            .joinToString("   |   ")
+        val video = if (p == null) emptyList() else videoParts(p.videoFormat)
+        val audio = if (p == null) emptyList() else audioParts(p.audioFormat)
+        streamVideo = video
+        streamAudio = audio
+        val all = video + audio
+        if (all.isEmpty()) { renderStream(0f); return }
+
+        val changed = all.filter { (key, text) -> lastParts[key]?.let { it != text } == true }.map { it.first }
+        lastParts = all.toMap()
+        if (changed.isNotEmpty()) {
+            glowKeys = changed.toSet()
+            streamAnim?.cancel()
+            streamAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = GLOW_MS
+                addUpdateListener { a ->
+                    val t = a.animatedFraction
+                    // Hold full glow for the first third, then fade out.
+                    renderStream(if (t < 0.33f) 1f else 1f - (t - 0.33f) / 0.67f)
+                }
+                addListener(object : AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: Animator) { glowKeys = emptySet(); renderStream(0f) }
+                })
+                start()
+            }
+        } else if (streamAnim?.isRunning != true) {
+            renderStream(0f)
+        }
     }
 
-    private fun videoInfo(f: Format?): String? {
-        if (f == null || f.height <= 0) return null
+    private fun renderStream(glow: Float) {
+        val base = getColor(R.color.stream_dim)
+        val glowColor = getColor(R.color.stream_glow)
+        val sb = SpannableStringBuilder()
+        fun group(parts: List<Pair<String, String>>) {
+            parts.forEachIndexed { i, (key, text) ->
+                if (i > 0) sb.append(" · ")
+                val start = sb.length
+                sb.append(text)
+                if (key in glowKeys && glow > 0f) {
+                    sb.setSpan(ForegroundColorSpan(ArgbEvaluator().evaluate(glow, base, glowColor) as Int),
+                        start, sb.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+            }
+        }
+        group(streamVideo)
+        if (streamVideo.isNotEmpty() && streamAudio.isNotEmpty()) sb.append("   |   ")
+        group(streamAudio)
+        osdStream.text = sb
+    }
+
+    private fun videoParts(f: Format?): List<Pair<String, String>> {
+        if (f == null || f.height <= 0) return emptyList()
         val tier = when { f.height >= 2160 -> "UHD"; f.height >= 720 -> "HD"; else -> "SD" }
-        val parts = mutableListOf("$tier ${f.width}x${f.height}")
-        if (f.frameRate > 0) parts += "${fmtNum(f.frameRate)} fps"
-        codecName(f.sampleMimeType)?.let { parts += it }
-        if (f.bitrate > 0) parts += "%.1f Mbps".format(f.bitrate / 1_000_000f)
-        return parts.joinToString(" · ")
+        return buildList {
+            add("res" to "$tier ${f.width}x${f.height}")
+            if (f.frameRate > 0) add("fps" to "${fmtNum(f.frameRate)} fps")
+            codecName(f.sampleMimeType)?.let { add("vcodec" to it) }
+            if (f.bitrate > 0) add("vbitrate" to "%.1f Mbps".format(f.bitrate / 1_000_000f))
+        }
     }
 
-    private fun audioInfo(f: Format?): String? {
-        if (f == null) return null
-        val parts = mutableListOf<String>()
-        f.language?.takeIf { it != "und" }?.let { parts += langName(it) }
-        val codec = codecName(f.sampleMimeType)
-        val layout = when (f.channelCount) { 1 -> "mono"; 2 -> "stereo"; 6 -> "5.1"; 8 -> "7.1"; else -> if (f.channelCount > 0) "${f.channelCount}ch" else null }
-        parts += listOfNotNull(codec, layout).joinToString(" ")
-        if (f.bitrate > 0) parts += "${f.bitrate / 1000} kbps"
-        return parts.filter { it.isNotEmpty() }.joinToString(" · ").ifEmpty { null }
+    private fun audioParts(f: Format?): List<Pair<String, String>> {
+        if (f == null) return emptyList()
+        return buildList {
+            f.language?.takeIf { it != "und" }?.let { add("alang" to langName(it)) }
+            val layout = when (f.channelCount) { 1 -> "mono"; 2 -> "stereo"; 6 -> "5.1"; 8 -> "7.1"; else -> if (f.channelCount > 0) "${f.channelCount}ch" else null }
+            listOfNotNull(codecName(f.sampleMimeType), layout).joinToString(" ").takeIf { it.isNotEmpty() }?.let { add("acodec" to it) }
+            if (f.bitrate > 0) add("abitrate" to "${f.bitrate / 1000} kbps")
+        }
     }
 
     private fun fmtNum(v: Float) = if (v == v.toInt().toFloat()) v.toInt().toString() else "%.2f".format(v)
@@ -646,5 +714,6 @@ class MainActivity : Activity(), LifecycleOwner {
         private const val MIN_BANNER_S = 1
         private const val MAX_BANNER_S = 15
         private const val HIGH_START_BPS = 20_000_000L
+        private const val GLOW_MS = 2500L
     }
 }
