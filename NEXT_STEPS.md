@@ -18,6 +18,13 @@ App lives in `android/` (package `nl.kpn.slim`, label "KPN Slim"). Release APK 1
 ### v0.3: stream info banner + settings (2026-11-09)
 Bottom info banner shows live video/audio stream info. Settings: first row of the channel list (OK/centre, then Left/Right/OK to change, Back to close). "High bandwidth start" (default off) gives ExoPlayer a 20 Mbps initial bandwidth estimate so it starts at 1080p50/8 Mbps instead of ramping up; "Info banner duration" 1-15 s (default 5). Both live in SharedPreferences `slim`. Info banner keys: Right / Info. The TV's system intercepts the Settings key, so settings are reached via the list.
 
+### v0.4: pause, start over, programme info (2026-11-09)
+- **Start over needs no new endpoint**: `VIDEOURL/LIVE/{ch}/{asset}?time={programStartMs}` (exact ms, not rounded) returns a manifest that begins at that moment (the response URL carries `&t=<ISO time>`). The USP window reaches back about 6 h (tried 10 min to 3 days, anything older is clamped). Played with `setMediaItem(item, 0)`. Programmes carry `contentOptions: STARTOVER`; the app only offers it when that flag is set. After a restart the banner shows `(-N min)`, progress follows the playback position (`now - currentLiveOffset + target offset`), and "Go to live" appears.
+- Careful when testing with curl: AVS rotates the xsrf/cookies, so a second call with the first session's cookie fails with `403-10110 Token not found`. Create a fresh session per call.
+- Pause: Play/Pause, Pause and Play media keys (and Space). Paused indicator top right.
+- Options menu: press Right or Info a second time while the banner is showing (Pause/Play, Start from beginning, Go to live, Programme info, Settings). Red = start over, Green = programme info.
+- Programme info panel: title, season/episode, time, genres, year, age rating, description, presenters/directors/cast (all from the EPG response).
+
 ### Known gaps / next ideas
 - **Channel logos don't load**: `images.tv.kpn.com/{logoMedium}` (e.g. `size_x/dtvchannels_1_100x50.png`) returns 404. The real URL pattern needs a recapture with `--allow-hosts` including `images\.tv\.kpn\.com` (libapp.so has a `/logo/` path segment). Views collapse gracefully meanwhile.
 - deviceId is hardcoded to this TV; deriving it on-device would make the app portable.

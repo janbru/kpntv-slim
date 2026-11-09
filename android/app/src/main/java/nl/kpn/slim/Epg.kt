@@ -18,13 +18,13 @@ class Epg {
     fun isStale() = System.currentTimeMillis() - loadedAt > REFRESH_MS
 
     /** Title of what is on right now, or null when unknown. */
-    fun now(channelId: Int): Program? {
-        val t = System.currentTimeMillis()
+    fun now(channelId: Int, at: Long = System.currentTimeMillis()): Program? {
+        val t = at
         return byChannel[channelId]?.firstOrNull { t >= it.startMs && t < it.endMs }
     }
 
-    fun next(channelId: Int): Program? {
-        val t = System.currentTimeMillis()
+    fun next(channelId: Int, at: Long = System.currentTimeMillis()): Program? {
+        val t = at
         return byChannel[channelId]?.firstOrNull { it.startMs > t }
     }
 

@@ -124,6 +124,118 @@
         android:paddingVertical="24dp"
         android:visibility="gone" />
 
+    <!-- Paused indicator -->
+    <TextView
+        android:id="@+id/paused"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_margin="40dp"
+        android:background="@drawable/osd_bg"
+        android:paddingHorizontal="20dp"
+        android:paddingVertical="10dp"
+        android:text="Paused"
+        android:textColor="@android:color/white"
+        android:textSize="18sp"
+        android:visibility="gone" />
+
+    <!-- Options menu (Right / Info while the banner is showing) -->
+    <LinearLayout
+        android:id="@+id/options"
+        android:layout_width="420dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:background="@drawable/osd_bg"
+        android:orientation="vertical"
+        android:padding="20dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/row_pause"
+            style="@style/OptionRow" />
+
+        <TextView
+            android:id="@+id/row_startover"
+            style="@style/OptionRow"
+            android:text="Start from beginning" />
+
+        <TextView
+            android:id="@+id/row_live"
+            style="@style/OptionRow"
+            android:text="Go to live" />
+
+        <TextView
+            android:id="@+id/row_info"
+            style="@style/OptionRow"
+            android:text="Programme info" />
+
+        <TextView
+            android:id="@+id/row_settings"
+            style="@style/OptionRow"
+            android:text="@string/settings" />
+    </LinearLayout>
+
+    <!-- Programme info -->
+    <ScrollView
+        android:id="@+id/info"
+        android:layout_width="900dp"
+        android:layout_height="440dp"
+        android:layout_gravity="center"
+        android:background="@drawable/osd_bg"
+        android:focusable="true"
+        android:padding="28dp"
+        android:scrollbars="none"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/info_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@android:color/white"
+                android:textSize="24sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/info_episode"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textColor="@android:color/white"
+                android:textSize="16sp" />
+
+            <TextView
+                android:id="@+id/info_meta"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:textColor="#B3FFFFFF"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/info_desc"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:lineSpacingMultiplier="1.1"
+                android:textColor="@android:color/white"
+                android:textSize="16sp" />
+
+            <TextView
+                android:id="@+id/info_credits"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:lineSpacingMultiplier="1.1"
+                android:textColor="#B3FFFFFF"
+                android:textSize="14sp" />
+        </LinearLayout>
+    </ScrollView>
+
     <!-- Settings panel (list header row, or the Settings key) -->
     <LinearLayout
         android:id="@+id/settings"

@@ -17,6 +17,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
@@ -61,6 +62,17 @@ class MainActivity : Activity(), LifecycleOwner {
     private lateinit var osdNext: TextView
     private lateinit var osdProgress: ProgressBar
     private lateinit var status: TextView
+    private lateinit var paused: View
+    private lateinit var options: View
+    private lateinit var rowPause: TextView
+    private lateinit var rowStartOver: View
+    private lateinit var rowLive: View
+    private lateinit var info: View
+    private lateinit var infoTitle: TextView
+    private lateinit var infoEpisode: TextView
+    private lateinit var infoMeta: TextView
+    private lateinit var infoDesc: TextView
+    private lateinit var infoCredits: TextView
     private lateinit var settings: View
     private lateinit var rowHighBw: View
     private lateinit var rowBanner: View
@@ -78,6 +90,7 @@ class MainActivity : Activity(), LifecycleOwner {
     private var digitJob: Job? = null
     private var digits = ""
     private var retriedCurrent = false
+    private var noticeJob: Job? = null
 
     private val prefs by lazy { getSharedPreferences("slim", MODE_PRIVATE) }
 
@@ -109,6 +122,22 @@ class MainActivity : Activity(), LifecycleOwner {
         osdNext = findViewById(R.id.osd_next)
         osdProgress = findViewById(R.id.osd_progress)
         status = findViewById(R.id.status)
+        paused = findViewById(R.id.paused)
+        options = findViewById(R.id.options)
+        rowPause = findViewById(R.id.row_pause)
+        rowStartOver = findViewById(R.id.row_startover)
+        rowLive = findViewById(R.id.row_live)
+        info = findViewById(R.id.info)
+        infoTitle = findViewById(R.id.info_title)
+        infoEpisode = findViewById(R.id.info_episode)
+        infoMeta = findViewById(R.id.info_meta)
+        infoDesc = findViewById(R.id.info_desc)
+        infoCredits = findViewById(R.id.info_credits)
+        rowPause.setOnClickListener { hideOptions(); togglePause() }
+        rowStartOver.setOnClickListener { hideOptions(); startOver() }
+        rowLive.setOnClickListener { hideOptions(); goLive() }
+        findViewById<View>(R.id.row_info).setOnClickListener { hideOptions(); showInfo() }
+        findViewById<View>(R.id.row_settings).setOnClickListener { hideOptions(); showSettings() }
         settings = findViewById(R.id.settings)
         rowHighBw = findViewById(R.id.row_highbw)
         rowBanner = findViewById(R.id.row_banner)
@@ -191,7 +220,7 @@ class MainActivity : Activity(), LifecycleOwner {
 
     // ---- tuning ----
 
-    private fun tune(index: Int, debounce: Boolean = true) {
+    private fun tune(index: Int, debounce: Boolean = true, startOverAt: Long? = null) {
         if (channels.isEmpty()) return
         val i = Math.floorMod(index, channels.size)
         if (i != current) { previous = current; retriedCurrent = false }
@@ -206,7 +235,7 @@ class MainActivity : Activity(), LifecycleOwner {
             if (debounce) delay(250) // let rapid zapping settle before hitting the API
             val p = player ?: return@launch
             p.stop()
-            val stream = withContext(Dispatchers.IO) { runCatching { avs.liveStream(ch) } }
+            val stream = withContext(Dispatchers.IO) { runCatching { avs.liveStream(ch, startOverAt) } }
             stream.onSuccess { s ->
                 hideStatus()
                 val item = MediaItem.Builder()
@@ -220,7 +249,10 @@ class MainActivity : Activity(), LifecycleOwner {
                         )
                     }
                     .build()
-                p.setMediaItem(item)
+                // Start over: the manifest begins at the programme start, so position 0 is that moment.
+                if (startOverAt != null) p.setMediaItem(item, 0L) else p.setMediaItem(item)
+                p.playWhenReady = true
+                setPausedIndicator(false)
                 p.prepare()
             }.onFailure { showStatus("${ch.name}: ${it.message}") }
         }
@@ -257,6 +289,28 @@ class MainActivity : Activity(), LifecycleOwner {
         if (event.action != KeyEvent.ACTION_DOWN) return super.dispatchKeyEvent(event)
         val code = event.keyCode
 
+        when (code) {
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_SPACE -> { togglePause(); return true }
+            KeyEvent.KEYCODE_MEDIA_PAUSE -> { setPaused(true); return true }
+            KeyEvent.KEYCODE_MEDIA_PLAY -> { setPaused(false); return true }
+        }
+
+        if (info.visibility == View.VISIBLE) {
+            when (code) {
+                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_PROG_GREEN -> hideInfo()
+                else -> return super.dispatchKeyEvent(event) // up/down scroll the text
+            }
+            return true
+        }
+
+        if (options.visibility == View.VISIBLE) {
+            when (code) {
+                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_DPAD_RIGHT -> hideOptions()
+                else -> return super.dispatchKeyEvent(event)
+            }
+            return true
+        }
+
         if (settings.visibility == View.VISIBLE) {
             when (code) {
                 KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_SETTINGS -> hideSettings()
@@ -284,7 +338,13 @@ class MainActivity : Activity(), LifecycleOwner {
                 if (channels.isEmpty()) loadChannels() else showList()
             }
             KeyEvent.KEYCODE_LAST_CHANNEL -> if (previous >= 0) tune(previous, debounce = false)
-            KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_DPAD_RIGHT -> channels.getOrNull(current)?.let(::showOsd)
+            // First press shows the banner; pressing again while it is up opens the options menu.
+            KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                if (osd.visibility == View.VISIBLE && digits.isEmpty()) showOptions()
+                else channels.getOrNull(current)?.let(::showOsd)
+            }
+            KeyEvent.KEYCODE_PROG_RED -> startOver()
+            KeyEvent.KEYCODE_PROG_GREEN -> showInfo()
             else -> return super.dispatchKeyEvent(event)
         }
         return true
@@ -305,6 +365,59 @@ class MainActivity : Activity(), LifecycleOwner {
             val idx = channels.indexOfFirst { it.number == n }
             if (idx >= 0) tune(idx, debounce = false) else osd.visibility = View.GONE
         }
+    }
+
+    // ---- playback controls ----
+
+    private fun togglePause() = setPaused(player?.playWhenReady == true)
+
+    private fun setPaused(pause: Boolean) {
+        val p = player ?: return
+        p.playWhenReady = !pause
+        setPausedIndicator(pause)
+    }
+
+    private fun setPausedIndicator(on: Boolean) {
+        paused.visibility = if (on) View.VISIBLE else View.GONE
+    }
+
+    /** Seconds the viewer is behind the live edge (paused or started over); 0 when live or unknown. */
+    private fun secondsBehindLive(): Long {
+        val p = player ?: return 0
+        val off = p.currentLiveOffset
+        if (off == C.TIME_UNSET || off < 0) return 0
+        // Even at the live edge the player sits a few seconds back (its target offset); don't count that as "behind".
+        val window = Timeline.Window()
+        val target = if (p.currentTimeline.isEmpty) 0L
+        else p.currentTimeline.getWindow(p.currentMediaItemIndex, window).liveConfiguration?.targetOffsetMs ?: 0L
+        return (off - target).coerceAtLeast(0) / 1000
+    }
+
+    /** Wall-clock moment currently on screen. */
+    private fun playedAt() = System.currentTimeMillis() - secondsBehindLive() * 1000
+
+    private fun startOver() {
+        val ch = channels.getOrNull(current) ?: return
+        val prog = epg.now(ch.id, playedAt())
+        when {
+            prog == null -> notice("No programme information for this channel")
+            !prog.startOver -> notice("Start from beginning is not available for this programme")
+            else -> {
+                tune(current, debounce = false, startOverAt = prog.startMs)
+                notice("Restarting: ${prog.title}")
+            }
+        }
+    }
+
+    private fun goLive() {
+        if (current >= 0) tune(current, debounce = false)
+    }
+
+    /** Short message that clears itself. */
+    private fun notice(msg: String) {
+        showStatus(msg)
+        noticeJob?.cancel()
+        noticeJob = lifecycleScope.launch { delay(2500); if (status.text == msg) hideStatus() }
     }
 
     // ---- guide ----
@@ -336,6 +449,61 @@ class MainActivity : Activity(), LifecycleOwner {
 
     private fun hideList() {
         list.visibility = View.GONE
+    }
+
+    private fun showOptions() {
+        val p = player
+        rowPause.text = if (p?.playWhenReady == false) "Play" else "Pause"
+        rowLive.visibility = if (secondsBehindLive() >= 15) View.VISIBLE else View.GONE
+        osd.visibility = View.GONE
+        options.visibility = View.VISIBLE
+        rowPause.requestFocus()
+    }
+
+    private fun hideOptions() {
+        options.visibility = View.GONE
+    }
+
+    private fun showInfo() {
+        val ch = channels.getOrNull(current) ?: return
+        val prog = epg.now(ch.id, playedAt())
+        osd.visibility = View.GONE
+        infoTitle.text = prog?.title ?: ch.name
+        if (prog == null) {
+            infoEpisode.text = ""
+            infoMeta.text = ""
+            infoDesc.text = "No programme information available."
+            infoCredits.text = ""
+        } else {
+            val ep = buildList {
+                if (prog.season > 0 && prog.episode > 0) add("S${prog.season} E${prog.episode}")
+                else if (prog.episode > 0) add("Episode ${prog.episode}")
+                if (prog.episodeTitle.isNotEmpty()) add(prog.episodeTitle)
+            }
+            infoEpisode.text = ep.joinToString("  ·  ")
+            infoEpisode.visibility = if (ep.isEmpty()) View.GONE else View.VISIBLE
+            val minutes = (prog.endMs - prog.startMs) / 60_000
+            infoMeta.text = listOfNotNull(
+                "${ch.name}  ${epg.time(prog.startMs)} – ${epg.time(prog.endMs)} ($minutes min)",
+                prog.genres.takeIf { it.isNotEmpty() }?.joinToString(", "),
+                prog.year.takeIf { it.isNotEmpty() },
+                prog.ageRating.takeIf { it > 0 }?.let { "$it+" },
+            ).joinToString("  ·  ")
+            infoDesc.text = prog.description.ifEmpty { "No description available." }
+            infoCredits.text = listOfNotNull(
+                prog.presenters.takeIf { it.isNotEmpty() }?.let { "Presenters: ${it.joinToString(", ")}" },
+                prog.directors.takeIf { it.isNotEmpty() }?.let { "Director: ${it.joinToString(", ")}" },
+                prog.actors.takeIf { it.isNotEmpty() }?.let { "Cast: ${it.joinToString(", ")}" },
+            ).joinToString("\n")
+            infoCredits.visibility = if (infoCredits.text.isEmpty()) View.GONE else View.VISIBLE
+        }
+        info.scrollTo(0, 0)
+        info.visibility = View.VISIBLE
+        info.requestFocus()
+    }
+
+    private fun hideInfo() {
+        info.visibility = View.GONE
     }
 
     private fun showSettings() {
@@ -435,16 +603,17 @@ class MainActivity : Activity(), LifecycleOwner {
 
     /** Fills the program rows of the banner for [ch]; clears them when [ch] is null or has no guide data. */
     private fun bindGuide(ch: Channel?) {
-        val now = ch?.let { epg.now(it.id) }
-        val next = ch?.let { epg.next(it.id) }
-        osdClock.text = epg.time(System.currentTimeMillis())
+        val at = playedAt()
+        val now = ch?.let { epg.now(it.id, at) }
+        val next = ch?.let { epg.next(it.id, at) }
+        val behindMin = secondsBehindLive() / 60
+        osdClock.text = epg.time(System.currentTimeMillis()) + if (behindMin >= 1) "  (-$behindMin min)" else ""
         osdTitle.text = now?.title.orEmpty()
         osdTime.text = now?.let { "${epg.time(it.startMs)} – ${epg.time(it.endMs)}" }.orEmpty()
         osdNext.text = next?.let { "Volgend: ${it.title}" }.orEmpty()
         osdProgress.visibility = if (now == null) View.INVISIBLE else View.VISIBLE
         if (now != null) {
-            val t = System.currentTimeMillis()
-            osdProgress.progress = ((t - now.startMs) * 1000 / (now.endMs - now.startMs)).toInt().coerceIn(0, 1000)
+            osdProgress.progress = ((at - now.startMs) * 1000 / (now.endMs - now.startMs)).toInt().coerceIn(0, 1000)
         }
     }
 

@@ -16,7 +16,23 @@ data class Channel(
 
 data class Stream(val manifestUrl: String, val licenseUrl: String?)
 
-data class Program(val title: String, val startMs: Long, val endMs: Long)
+data class Program(
+    val title: String,
+    val startMs: Long,
+    val endMs: Long,
+    val description: String = "",
+    val genres: List<String> = emptyList(),
+    val year: String = "",
+    val episodeTitle: String = "",
+    val season: Int = 0,
+    val episode: Int = 0,
+    val presenters: List<String> = emptyList(),
+    val directors: List<String> = emptyList(),
+    val actors: List<String> = emptyList(),
+    val ageRating: Int = 0,
+    /** The API flags whether this programme may be restarted from its beginning. */
+    val startOver: Boolean = false,
+)
 
 class AvsException(message: String) : IOException(message)
 
@@ -81,16 +97,32 @@ class AvsClient(
                 val title = md.optString("title")
                 val start = md.optLong("airingStartTime")
                 val end = md.optLong("airingEndTime")
-                if (title.isEmpty() || end <= start) null else Program(title, start, end)
+                if (title.isEmpty() || end <= start) null else Program(
+                    title = title,
+                    startMs = start,
+                    endMs = end,
+                    description = md.optString("longDescription"),
+                    genres = md.strings("genres"),
+                    year = md.optString("year"),
+                    episodeTitle = md.optString("episodeTitle"),
+                    season = md.optInt("season"),
+                    episode = md.optInt("episodeNumber"),
+                    presenters = md.strings("presenters"),
+                    directors = md.strings("directors"),
+                    actors = md.strings("actors"),
+                    ageRating = md.optInt("pcLevel"),
+                    startOver = md.strings("contentOptions").contains("STARTOVER"),
+                )
             }.sortedBy { it.startMs }
         }
         return out
     }
 
     @Synchronized
-    fun liveStream(ch: Channel): Stream {
-        // The official app rounds `time` down to 5 minutes (CDN-cache friendly).
-        val time = System.currentTimeMillis() / 300_000 * 300_000
+    fun liveStream(ch: Channel, startAtMs: Long? = null): Stream {
+        // Live: the official app rounds `time` down to 5 minutes (CDN-cache friendly).
+        // Start over: `time` = the programme start; the returned manifest then begins at that moment.
+        val time = startAtMs ?: (System.currentTimeMillis() / 300_000 * 300_000)
         val json = authed {
             get("$base/CONTENT/VIDEOURL/LIVE/${ch.id}/${ch.assetId}?deviceId=$deviceId&profile=G09&time=$time")
         }
@@ -194,6 +226,11 @@ class AvsClient(
                 key.equals("x-xsrf-token", true) -> values.firstOrNull()?.let { xsrf = it }
             }
         }
+    }
+
+    private fun JSONObject.strings(key: String): List<String> {
+        val a = optJSONArray(key) ?: return emptyList()
+        return (0 until a.length()).map { a.optString(it) }.filter { it.isNotEmpty() }
     }
 
     private fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
