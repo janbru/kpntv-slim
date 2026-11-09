@@ -140,7 +140,6 @@ class MainActivity : Activity(), LifecycleOwner {
     private var timeshiftReady = false
 
     /** What is playing, so a retry after an error (expired token) keeps watching the same thing. */
-    private var curStartOver: Long? = null
     private var curCatchUp: Program? = null
 
     /** The programme the info panel shows (it can belong to any channel, when opened from the TV guide). */
@@ -317,17 +316,21 @@ class MainActivity : Activity(), LifecycleOwner {
 
     /**
      * Plays channel [index]: live by default, from a programme start with [startOverAt] (the stream's window is
-     * about 6 h deep), or a finished programme from the recording with [catchUp].
+     * about 6 h deep), or a finished programme from the recording with [catchUp]. [resumePos] starts a catch-up
+     * recording at that position instead of its beginning, [startPaused] keeps the player paused once it is ready
+     * (both are for picking up where an expired play URL interrupted the viewer).
      */
-    private fun tune(index: Int, debounce: Boolean = true, startOverAt: Long? = null, catchUp: Program? = null) {
+    private fun tune(
+        index: Int, debounce: Boolean = true, startOverAt: Long? = null, catchUp: Program? = null,
+        resumePos: Long? = null, startPaused: Boolean = false,
+    ) {
         if (channels.isEmpty()) return
         val i = Math.floorMod(index, channels.size)
         if (i != current) { previous = current; retriedCurrent = false }
         current = i
-        curStartOver = startOverAt
         curCatchUp = catchUp
         timeshiftBase = startOverAt ?: catchUp?.let { it.startMs - CATCHUP_LEAD_MS }
-        timeshiftStartPos = if (catchUp != null) CATCHUP_LEAD_MS else 0L
+        timeshiftStartPos = resumePos ?: if (catchUp != null) CATCHUP_LEAD_MS else 0L
         timeshiftReady = false
         adapter?.playingIndex = i
         guide.playingIndex = i
@@ -367,8 +370,8 @@ class MainActivity : Activity(), LifecycleOwner {
                 glowKeys = emptySet()
                 streamAnim?.cancel()
                 if (timeshiftBase != null) p.setMediaItem(item, timeshiftStartPos) else p.setMediaItem(item)
-                p.playWhenReady = true
-                setPausedIndicator(false)
+                p.playWhenReady = !startPaused
+                setPausedIndicator(startPaused)
                 p.prepare()
             }.onFailure { hideLoader(); showStatus("${ch.name}: ${it.message}") }
         }
@@ -382,10 +385,22 @@ class MainActivity : Activity(), LifecycleOwner {
                 p.prepare()
                 return
             }
-            // Manifest tokens / licenses expire: fetch a fresh play URL once before giving up.
+            // Manifest tokens / licenses expire: fetch a fresh play URL once before giving up, and pick up where the
+            // viewer was (a long pause) instead of at the live edge or the start of the programme.
             if (!retriedCurrent && current >= 0) {
                 retriedCurrent = true
-                tune(current, debounce = false, startOverAt = curStartOver, catchUp = curCatchUp)
+                val wasPaused = !p.playWhenReady
+                val catchUp = curCatchUp
+                val behind = wasPaused || secondsBehindLive() >= 3
+                when {
+                    catchUp != null ->
+                        tune(current, debounce = false, catchUp = catchUp, resumePos = p.currentPosition.coerceAtLeast(0L), startPaused = wasPaused)
+                    timeshiftBase != null || behind ->
+                        // The start-over stream can begin at any moment within its reach, which is what a paused
+                        // live stream (or a started-over one) needs to continue from the same picture.
+                        tune(current, debounce = false, startOverAt = playedAt(), startPaused = wasPaused)
+                    else -> tune(current, debounce = false)
+                }
             } else {
                 hideLoader()
                 showStatus("Playback error: ${error.errorCodeName}")
