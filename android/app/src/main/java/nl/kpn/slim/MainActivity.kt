@@ -111,14 +111,15 @@ class MainActivity : Activity(), LifecycleOwner {
     private var loaderJob: Job? = null
     private var pausedJob: Job? = null
     private var lastBackAt = 0L
-    private var lastStopAt = 0L
+    private var guardKey: String? = null
+    private var guardAt = 0L
+    private var keyRepeating = false
     private var exitToast: Toast? = null
     private var lastSeekAt = 0L
     private var seekStep = 0
 
     // Stream info glow: last shown pieces (key to text), the pieces currently glowing, and the running fade.
     private var streamVideo: List<Pair<String, String>> = emptyList()
-    private var streamAudio: List<Pair<String, String>> = emptyList()
     private var lastParts: Map<String, String> = emptyMap()
     private var glowKeys: Set<String> = emptySet()
     private var streamAnim: ValueAnimator? = null
@@ -172,7 +173,7 @@ class MainActivity : Activity(), LifecycleOwner {
         info = findViewById(R.id.info)
         infoScroll = findViewById(R.id.info_scroll)
         infoStartOver = findViewById(R.id.info_startover)
-        infoStartOver.setOnClickListener { hideInfo(); startOver() }
+        infoStartOver.setOnClickListener { startOver() }
         osdLogo = findViewById(R.id.osd_logo)
         infoImage = findViewById(R.id.info_image)
         infoTitle = findViewById(R.id.info_title)
@@ -181,8 +182,8 @@ class MainActivity : Activity(), LifecycleOwner {
         infoDesc = findViewById(R.id.info_desc)
         infoCredits = findViewById(R.id.info_credits)
         rowPause.setOnClickListener { hideOptions(); togglePause() }
-        rowStartOver.setOnClickListener { hideOptions(); startOver() }
-        rowLive.setOnClickListener { hideOptions(); goLive() }
+        rowStartOver.setOnClickListener { startOver() }
+        rowLive.setOnClickListener { guard("live", "Not live. Press OK again to return to live TV") { hideOptions(); goLive() } }
         findViewById<View>(R.id.row_info).setOnClickListener { hideOptions(); showInfo() }
         findViewById<View>(R.id.row_channels).setOnClickListener { hideOptions(); showList() }
         findViewById<View>(R.id.row_settings).setOnClickListener { hideOptions(); showSettings() }
@@ -256,7 +257,7 @@ class MainActivity : Activity(), LifecycleOwner {
             val result = withContext(Dispatchers.IO) { runCatching { avs.liveChannels() } }
             result.onSuccess { list ->
                 channels = list
-                adapter = ChannelAdapter(list, logos, epg, showLogos = { showLogos }, onSettings = { hideList(); showSettings() }) { i -> hideList(); tune(i, debounce = false) }
+                adapter = ChannelAdapter(list, logos, epg, showLogos = { showLogos }, onSettings = { hideList(); showSettings() }) { i -> guard("ch:$i", "Not live. Press OK again to change channel") { hideList(); tune(i, debounce = false) } }
                 this@MainActivity.list.adapter = adapter
                 hideStatus()
                 val last = prefs.getInt("lastChannelId", -1)
@@ -290,6 +291,8 @@ class MainActivity : Activity(), LifecycleOwner {
             if (debounce) delay(250) // let rapid zapping settle before hitting the API
             val p = player ?: return@launch
             p.stop()
+            p.playWhenReady = true
+            setPausedIndicator(false)
             val stream = withContext(Dispatchers.IO) { runCatching { avs.liveStream(ch, startOverAt) } }
             stream.onSuccess { s ->
                 hideStatus()
@@ -352,6 +355,7 @@ class MainActivity : Activity(), LifecycleOwner {
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.action != KeyEvent.ACTION_DOWN) return super.dispatchKeyEvent(event)
         val code = event.keyCode
+        keyRepeating = event.repeatCount > 0
 
         when (code) {
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_SPACE -> { togglePause(); return true }
@@ -365,7 +369,7 @@ class MainActivity : Activity(), LifecycleOwner {
         if (info.visibility == View.VISIBLE) {
             when (code) {
                 KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_PROG_GREEN -> hideInfo()
-                KeyEvent.KEYCODE_PROG_RED -> { hideInfo(); startOver() }
+                KeyEvent.KEYCODE_PROG_RED -> startOver()
                 else -> return super.dispatchKeyEvent(event) // up/down scroll the text, OK presses the button
             }
             return true
@@ -401,15 +405,19 @@ class MainActivity : Activity(), LifecycleOwner {
         if (code in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9) { typeDigit(code - KeyEvent.KEYCODE_0); return true }
 
         when (code) {
-            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> tune(current + 1)
-            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> tune(current - 1)
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP ->
+                guard("zap:+1", "Not live. Press again to change channel") { tune(current + 1) }
+            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN ->
+                guard("zap:-1", "Not live. Press again to change channel") { tune(current - 1) }
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
                 if (channels.isEmpty()) loadChannels() else showOptions()
             }
             KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_GUIDE -> {
                 if (channels.isEmpty()) loadChannels() else showList()
             }
-            KeyEvent.KEYCODE_LAST_CHANNEL -> if (previous >= 0) tune(previous, debounce = false)
+            KeyEvent.KEYCODE_LAST_CHANNEL -> if (previous >= 0) {
+                guard("last", "Not live. Press again to change channel") { tune(previous, debounce = false) }
+            }
             // First press shows the banner; pressing again while it is up opens the options menu.
             KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_DPAD_RIGHT -> {
                 if (osd.visibility == View.VISIBLE && digits.isEmpty()) showOptions()
@@ -435,7 +443,9 @@ class MainActivity : Activity(), LifecycleOwner {
             val n = digits.toIntOrNull()
             digits = ""
             val idx = channels.indexOfFirst { it.number == n }
-            if (idx >= 0) tune(idx, debounce = false) else osd.visibility = View.GONE
+            if (idx < 0) { osd.visibility = View.GONE; return@launch }
+            val ran = guard("ch:$idx", "Not live. Enter $n again to change channel", fromKey = false) { tune(idx, debounce = false) }
+            if (!ran) channels.getOrNull(current)?.let(::showOsd) // back to the banner of what is still playing
         }
     }
 
@@ -505,19 +515,33 @@ class MainActivity : Activity(), LifecycleOwner {
         channels.getOrNull(current)?.let(::showOsd)
     }
 
-    /** Stop: guarded. Behind live or paused, the first press asks, a second one within [STOP_WINDOW_MS] goes live. */
+    /** Stop: back to live. Guarded like every way out of non-live playback; when already live it only says so. */
     private fun stopKey() {
-        val behind = secondsBehindLive() >= 3 || timeshiftBase != null || player?.playWhenReady == false
-        if (!behind) { hint("You are watching live TV"); return }
+        if (!nonLive()) { hint("You are watching live TV"); return }
+        guard("live", "Press stop again to return to live TV") { goLive() }
+    }
+
+    /** True when leaving the current stream would lose the viewer's place: paused, behind live, or started over. */
+    private fun nonLive() = secondsBehindLive() >= 3 || timeshiftBase != null || player?.playWhenReady == false
+
+    /**
+     * Runs [action] at once while watching live. When not live, the first press only shows [msg]; the same
+     * action again within [GUARD_MS] runs it. Key auto-repeat never confirms. Returns whether [action] ran.
+     */
+    private fun guard(key: String, msg: String, fromKey: Boolean = true, action: () -> Unit): Boolean {
+        if (!nonLive()) { guardKey = null; action(); return true }
+        if (fromKey && keyRepeating) return false
         val now = System.currentTimeMillis()
-        if (now - lastStopAt < STOP_WINDOW_MS) {
-            lastStopAt = 0
+        if (guardKey == key && now - guardAt < GUARD_MS) {
+            guardKey = null
             hint(null)
-            goLive()
-        } else {
-            lastStopAt = now
-            hint("Press stop again to return to live TV")
+            action()
+            return true
         }
+        guardKey = key
+        guardAt = now
+        hint(msg)
+        return false
     }
 
     /** First press shows a hint, a second one within [EXIT_WINDOW_MS] leaves the app. */
@@ -541,6 +565,8 @@ class MainActivity : Activity(), LifecycleOwner {
     /** Seconds the viewer is behind the live edge (paused or started over); 0 when live or unknown. */
     private fun secondsBehindLive(): Long {
         timeshiftBase?.let { return (System.currentTimeMillis() - playedAt()).coerceAtLeast(0) / 1000 }
+        // A new stream that has not started yet is not "behind" anything (the old stream's offset is stale).
+        if (!timeshiftReady) return 0
         val p = player ?: return 0
         val off = p.currentLiveOffset
         if (off == C.TIME_UNSET || off < 0) return 0
@@ -564,14 +590,17 @@ class MainActivity : Activity(), LifecycleOwner {
         val ch = channels.getOrNull(current) ?: return
         val prog = epg.now(ch.id, playedAt())
         when {
-            prog == null -> notice("No programme information for this channel")
-            !prog.startOver -> notice("Start from beginning is not available for this programme")
-            else -> {
+            prog == null -> { dismissPanels(); notice("No programme information for this channel") }
+            !prog.startOver -> { dismissPanels(); notice("Start from beginning is not available for this programme") }
+            else -> guard("startover", "Not live. Press again to restart the programme") {
+                dismissPanels()
                 tune(current, debounce = false, startOverAt = prog.startMs)
                 notice("Restarting: ${prog.title}")
             }
         }
     }
+
+    private fun dismissPanels() { hideOptions(); hideInfo() }
 
     private fun goLive() {
         val p = player
@@ -702,7 +731,7 @@ class MainActivity : Activity(), LifecycleOwner {
     /** [dir] is -1 (Left), +1 (Right / OK). The banner duration wraps around on OK past the maximum. */
     private fun adjustSetting(row: View, dir: Int) {
         when (row.id) {
-            R.id.row_highbw -> {
+            R.id.row_highbw -> guard("hibw", "Not live. Press again to apply; the stream restarts") {
                 highBandwidthStart = !highBandwidthStart
                 // The bandwidth meter is fixed at player creation, so rebuild and re-tune.
                 releasePlayer()
@@ -735,17 +764,15 @@ class MainActivity : Activity(), LifecycleOwner {
     }
 
     /**
-     * "HD 1920x1080 · 50 fps · H.264 · 8.0 Mbps   |   NL · AC-3 5.1 · 384 kbps" for what is actually playing.
+     * "HD 1920x1080 · 50 fps · H.264 · 8.0 Mbps" for the video that is actually playing.
      * Each piece has a key; when a piece changes while the same stream keeps playing (adaptive quality switch),
      * it glows green and fades back to the dim base colour.
      */
     private fun bindStream() {
         val p = player
         val video = if (p == null) emptyList() else videoParts(p.videoFormat)
-        val audio = if (p == null) emptyList() else audioParts(p.audioFormat)
         streamVideo = video
-        streamAudio = audio
-        val all = video + audio
+        val all = video
         if (all.isEmpty()) { renderStream(0f); return }
 
         val changed = all.filter { (key, text) -> lastParts[key]?.let { it != text } == true }.map { it.first }
@@ -786,8 +813,6 @@ class MainActivity : Activity(), LifecycleOwner {
             }
         }
         group(streamVideo)
-        if (streamVideo.isNotEmpty() && streamAudio.isNotEmpty()) sb.append("   |   ")
-        group(streamAudio)
         val appearing = osdStream.text.isEmpty() && sb.isNotEmpty()
         osdStream.text = sb
         if (appearing) {
@@ -812,33 +837,12 @@ class MainActivity : Activity(), LifecycleOwner {
         }
     }
 
-    private fun audioParts(f: Format?): List<Pair<String, String>> {
-        if (f == null) return emptyList()
-        return buildList {
-            f.language?.takeIf { it != "und" }?.let { add("alang" to langName(it)) }
-            val layout = when (f.channelCount) { 1 -> "mono"; 2 -> "stereo"; 6 -> "5.1"; 8 -> "7.1"; else -> if (f.channelCount > 0) "${f.channelCount}ch" else null }
-            listOfNotNull(codecName(f.sampleMimeType), layout).joinToString(" ").takeIf { it.isNotEmpty() }?.let { add("acodec" to it) }
-            if (f.bitrate > 0) add("abitrate" to "${f.bitrate / 1000} kbps")
-        }
-    }
-
     private fun fmtNum(v: Float) = if (v == v.toInt().toFloat()) v.toInt().toString() else "%.2f".format(v)
-
-    private fun langName(code: String) = when (code.lowercase()) {
-        "nl", "nld", "dut", "ned" -> "NL"
-        "en", "eng" -> "EN"
-        else -> code.uppercase()
-    }
 
     private fun codecName(mime: String?) = when (mime) {
         MimeTypes.VIDEO_H264 -> "H.264"
         MimeTypes.VIDEO_H265 -> "HEVC"
         MimeTypes.VIDEO_MPEG2 -> "MPEG-2"
-        MimeTypes.AUDIO_AAC -> "AAC"
-        MimeTypes.AUDIO_AC3 -> "AC-3"
-        MimeTypes.AUDIO_E_AC3, MimeTypes.AUDIO_E_AC3_JOC -> "E-AC-3"
-        MimeTypes.AUDIO_MPEG_L2 -> "MP2"
-        MimeTypes.AUDIO_MPEG -> "MP3"
         else -> null
     }
 
@@ -878,7 +882,7 @@ class MainActivity : Activity(), LifecycleOwner {
         private const val MAX_BANNER_S = 15
         private const val LOADER_DELAY_MS = 1000L
         private const val EXIT_WINDOW_MS = 2000L
-        private const val STOP_WINDOW_MS = 2500L
+        private const val GUARD_MS = 2500L
         private const val STREAM_FADE_MS = 700L
         private const val SEEK_REPEAT_MS = 1500L
         /** Seek step in seconds; each quick repeat of the key moves one step up the ladder. */
