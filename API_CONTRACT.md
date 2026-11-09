@@ -3,11 +3,11 @@
 App: `com.kpn.kpnandroidtv` v09.06.00 (Flutter, Dart pkg `pca_app`). Backend = Nagra/MediaKind **AVS** (Agile Video Service), API version "avs67".
 Captured via WireGuard-mode mitmproxy + reFlutter SSL-bypass build on a Philips Android TV. **Whole chain re-validated from a plain HTTP client (curl on macOS)** — no app/device needed beyond a registered `deviceId`.
 
-## Key fact: auth is deviceId-only
-`POST /USER/SESSIONS` takes **only a `deviceId`** (no password/OAuth/Firebase token in the body). The device is pre-registered to the account during the one-time KPN login/pairing. Once registered, sessions mint from deviceId alone. `isDevRegistered:false` in the response does not block live playback.
+## Key fact: auth is deviceId-only once the device is registered
+`POST /USER/SESSIONS` takes **only a `deviceId`** (no password/OAuth/Firebase token in the body) for a registered device. A device gets registered by its first sign-in with abonnementsnummer + pincode (section 2b), or by the official app's own pairing. Once registered, sessions mint from deviceId alone. `isDevRegistered:false` in the response does not block live playback.
 
-- Account number (`tan`): `<REDACTED>` (see local `gradle.properties`, git-ignored)
-- This TV's `deviceId` (SHA-256, 64 hex): `<REDACTED>` (see local `gradle.properties`, git-ignored)
+- Account number (`tan`): not written here; the app keeps it in its private preferences (optional seed: git-ignored `gradle.properties`)
+- `deviceId` (SHA-256 style, 64 hex): not written here; made by the app at the first sign-in
 - Derivation in the official TV app: serial-based, then SHA-256 ("serialBasedDeviceId"). Not reproduced and not needed: the web player makes up its own deviceId (SHA-256 over a random number, the username and a timestamp) and it is registered at the first sign-in.
 
 ## Hosts
@@ -39,8 +39,8 @@ POST https://{avsHost}/000002/1.5/A/nld/androidtv/kpn/USER/SESSIONS/?0_0=09.06.0
 body:
 {"credentialsStdAuth":{"deviceInfo":{
   "deviceId":"<SHA256>","deviceIdType":"DEVICEID","deviceType":"androidtv",
-  "deviceModel":"PH9M_EA_5599","deviceVendor":"Philips",
-  "swVersionId":"STT2.230526.001","deviceFirmVersion":"STT2.230526.001",
+  "deviceModel":"<Build.DEVICE>","deviceVendor":"<Build.MANUFACTURER>",
+  "swVersionId":"<Build.ID>","deviceFirmVersion":"<Build.ID>",
   "appVersion":"09.06.00","serialNumber":"NotAvailable","ipAddress":"127.0.0.1"}}}
 → 200, Set-Cookie: sessionId, up (JWT, Max-Age 1e6s), avs6_cookie (JWT, Max-Age 14400s=4h)
    Header: X-Xsrf-Token, Avs-Refresh-Token. Body = full user profile (resultObj.profile.profileData).
@@ -48,7 +48,7 @@ body:
 `up` JWT payload: userId, username(=account), userOptions [NPVR_VIEW, CATCHUP, STARTOVER, OOH_LIVE, OOH_VOD]. `avs6_cookie` is the AVS session JWT (iss "AVS").
 
 ### 2b. First sign-in (registers a new deviceId)
-Taken from the KPN web player (`https://tv.kpn.com/app.js`, `loginWithTan(tan, pin)`); implemented in the app but not yet exercised with real credentials.
+Taken from the KPN web player (`https://tv.kpn.com/app.js`, `loginWithTan(tan, pin)`). **Verified from our Android app on the Philips**: with a self-made deviceId and the TV's `Build` values as `deviceInfo` the server registered the device, and later deviceId-only sessions work.
 ```
 POST /USER/SESSIONS/    (same URL as above)
 {"credentialsStdAuth":{"username":"<abonnementsnummer>","password":"<pincode>","remember":true,

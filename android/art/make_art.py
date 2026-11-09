@@ -157,8 +157,9 @@ def render(svg_text, out, w, h):
 
 
 def write_hint_icon():
-    """Round icon for the in-app hint pill (30dp = 60px at xhdpi)."""
+    """Round icons drawn by the app itself: hint pill (30dp = 60px at xhdpi) and the Settings row (40dp = 80px)."""
     render(icon_round_svg(60), RES / "drawable-xhdpi/hint_icon.png", 60, 60)
+    render(icon_round_svg(80), RES / "drawable-xhdpi/list_icon.png", 80, 80)
 
 
 def write_icon_pngs():

@@ -60,11 +60,11 @@ Nagra/MediaKind **AVS** (Agile Video Service), API generation "avs67". Classic A
 
 ## 4. The auth model (key simplification)
 
-- One-time: the device is paired to the account via KPN OAuth (`inloggen.kpn.com`) + a Firebase custom token (`kpn_<id>`). We did **not** need to reproduce this — the TV is already paired.
-- Steady state: **`POST /USER/SESSIONS` authenticates with the `deviceId` alone** (a serial-based SHA-256). No password, OAuth, or Firebase token in the request body. The response sets `sessionId` / `up` / `avs6_cookie` cookies + `x-xsrf-token`, which authorize all subsequent calls.
-- The account number is only used in the EAR host-discovery call.
+- One-time registration of a device. The official TV app does it through KPN OAuth (`inloggen.kpn.com`) + a Firebase custom token (`kpn_<id>`); we did not capture or reproduce that. The KPN **web player** shows a simpler way that our app uses: log in once with abonnementsnummer + pincode (`loginWithTan(tan, pin)` in `https://tv.kpn.com/app.js`), sending a deviceId the client made up itself (the web player hashes a random number, the username and a timestamp with SHA-256).
+- Steady state: **`POST /USER/SESSIONS` authenticates with the `deviceId` alone** (a 64-hex SHA-256 style id; the official TV app derives it from the serial, we never needed that). No password, OAuth, or Firebase token in the request body. The response sets `sessionId` / `up` / `avs6_cookie` cookies + `x-xsrf-token`, which authorize all subsequent calls.
+- The account number is used in the EAR host-discovery call and as the sign-in username.
 
-For the minimal app on this (already-paired) TV: reuse/replicate the deviceId → sessions work directly. (A brand-new, unpaired device would still need the one-time OAuth pairing; out of scope for a personal viewer on an already-registered device.)
+For the minimal app: **verified on the Philips (session 5)**. The app makes its own random deviceId, the user signs in once with abonnementsnummer + pincode, KPN registers that deviceId (with `deviceType androidtv` and the TV's own `Build` values), and from then on sessions work from the deviceId alone. The pincode is never stored. Not reproducing KPN's serial-based derivation was deliberate. Open: a possible per-account device limit; the web player has `USER/DEVICES` (list, delete).
 
 ---
 
@@ -90,7 +90,7 @@ Full headers/bodies/examples: see `API_CONTRACT.md`.
 - **Networking:** OkHttp/Retrofit (or ktor) + a cookie jar; one small AVS client implementing steps 1–4.
 - **Player:** Media3 `ExoPlayer`, `DashMediaSource`, `DefaultDrmSessionManager` (Widevine) with `licenseUri` from the VIDEOURL response.
 - **Strip everything else:** no Firebase, ads, consent, recordings, VOD, cast, analytics.
-- **Scope v1:** login(deviceId) + channel grid + play + zap. EPG now/next is a cheap add from `/TRAY/SEARCH/PROGRAM?filter_airingTime=now`.
+- **Scope v1 (built, now at v0.8):** sign-in once + deviceId sessions + channel list + play + zap, plus EPG now/next (one `TRAY/EPG` call for all channels), start over, pause, programme info, images. See `NEXT_STEPS.md`.
 
 ---
 
@@ -103,6 +103,8 @@ Full headers/bodies/examples: see `API_CONTRACT.md`.
 | `libs/libapp.so` | Dart AOT snapshot (string-mined) |
 | `tools/` | APKEditor jar, universal/merged/patched/signed APK builds |
 | `capture/` | mitmproxy flows + dumps, WireGuard config, validated `channels.json`/session files |
+| `android/` | the native app (Kotlin + Media3), `android/art/` the icon and banner generator |
+| `NEXT_STEPS.md` | project state, code map, remote keys, gotchas, ideas (read first when resuming) |
 | `API_CONTRACT.md` | exact HTTP contract |
 | `FINDINGS.md` | this report |
 
@@ -110,6 +112,7 @@ Full headers/bodies/examples: see `API_CONTRACT.md`.
 
 ## 8. Caveats / legal
 
-- This documents interoperation with a service the account holder subscribes to, for a personal minimal client. It does **not** bypass DRM (Widevine still required) or circumvent authentication — it uses the account's own device-based session.
+- This documents interoperation with a service the account holder subscribes to, for a personal minimal client. It does **not** bypass DRM (Widevine still required) or circumvent authentication: the app signs in with the account holder's own abonnementsnummer and pincode once, and uses the resulting device-based session.
+- The account number and deviceId are deliberately not written in these docs.
 - Tokens/cookies captured are short-lived (`avs6_cookie` ~4 h) and account-specific; the DASH manifest URLs are time- and token-limited.
 - The capture build (reFlutter + debuggable, debug-signed) is for analysis only. The TV should be returned to the official app.
