@@ -17,13 +17,14 @@
     <!-- Bottom info banner shown after zapping / Info -->
     <LinearLayout
         android:id="@+id/osd"
-        android:layout_width="640dp"
+        android:layout_width="860dp"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom|center_horizontal"
-        android:layout_marginBottom="48dp"
+        android:layout_marginBottom="40dp"
         android:background="@drawable/osd_bg"
         android:orientation="vertical"
-        android:padding="20dp"
+        android:paddingHorizontal="20dp"
+        android:paddingVertical="12dp"
         android:visibility="gone">
 
         <LinearLayout
@@ -37,39 +38,50 @@
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="8dp"
                 android:textColor="@color/kpn_green"
-                android:textSize="15sp"
+                android:textSize="14sp"
                 android:textStyle="bold" />
 
             <TextView
                 android:id="@+id/osd_name"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@android:color/white"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/osd_stream"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_marginHorizontal="16dp"
                 android:layout_weight="1"
-                android:textColor="@android:color/white"
-                android:textSize="15sp" />
+                android:ellipsize="end"
+                android:gravity="end"
+                android:maxLines="1"
+                android:textColor="#B3FFFFFF"
+                android:textSize="12sp" />
 
             <TextView
                 android:id="@+id/osd_clock"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:textColor="@android:color/white"
-                android:textSize="15sp" />
+                android:textSize="14sp" />
         </LinearLayout>
 
         <TextView
             android:id="@+id/osd_title"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="4dp"
             android:ellipsize="end"
             android:maxLines="1"
             android:textColor="@android:color/white"
-            android:textSize="26sp" />
+            android:textSize="22sp" />
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="4dp"
             android:orientation="horizontal">
 
             <TextView
@@ -77,7 +89,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:textColor="#B3FFFFFF"
-                android:textSize="14sp" />
+                android:textSize="13sp" />
 
             <TextView
                 android:id="@+id/osd_next"
@@ -89,7 +101,7 @@
                 android:gravity="end"
                 android:maxLines="1"
                 android:textColor="#B3FFFFFF"
-                android:textSize="14sp" />
+                android:textSize="13sp" />
         </LinearLayout>
 
         <ProgressBar
@@ -97,7 +109,7 @@
             style="?android:attr/progressBarStyleHorizontal"
             android:layout_width="match_parent"
             android:layout_height="4dp"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="4dp"
             android:max="1000"
             android:progressDrawable="@drawable/osd_progress" />
     </LinearLayout>

@@ -12,10 +12,13 @@ import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Tracks
+import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -51,6 +54,7 @@ class MainActivity : Activity(), LifecycleOwner {
     private lateinit var osdNumber: TextView
     private lateinit var osdName: TextView
     private lateinit var osdClock: TextView
+    private lateinit var osdStream: TextView
     private lateinit var osdTitle: TextView
     private lateinit var osdTime: TextView
     private lateinit var osdNext: TextView
@@ -83,6 +87,7 @@ class MainActivity : Activity(), LifecycleOwner {
         osdNumber = findViewById(R.id.osd_number)
         osdName = findViewById(R.id.osd_name)
         osdClock = findViewById(R.id.osd_clock)
+        osdStream = findViewById(R.id.osd_stream)
         osdTitle = findViewById(R.id.osd_title)
         osdTime = findViewById(R.id.osd_time)
         osdNext = findViewById(R.id.osd_next)
@@ -202,6 +207,9 @@ class MainActivity : Activity(), LifecycleOwner {
             }
         }
 
+        override fun onVideoSizeChanged(videoSize: VideoSize) = bindStream()
+        override fun onTracksChanged(tracks: Tracks) = bindStream()
+
         override fun onPlaybackStateChanged(state: Int) {
             if (state == Player.STATE_READY) { retriedCurrent = false; hideStatus() }
         }
@@ -286,10 +294,59 @@ class MainActivity : Activity(), LifecycleOwner {
         osdNumber.text = ch.number.toString()
         osdName.text = ch.name
         bindGuide(ch)
+        bindStream()
         if (epg.isStale()) refreshEpg()
         osd.visibility = View.VISIBLE
         osdJob?.cancel()
         osdJob = lifecycleScope.launch { delay(5000); osd.visibility = View.GONE }
+    }
+
+    /** "HD 1920x1080 · 50 fps · H.264 · 8.0 Mbps   |   NL · AC-3 5.1 · 384 kbps" for what is actually playing. */
+    private fun bindStream() {
+        val p = player
+        osdStream.text = if (p == null) "" else listOfNotNull(videoInfo(p.videoFormat), audioInfo(p.audioFormat))
+            .joinToString("   |   ")
+    }
+
+    private fun videoInfo(f: Format?): String? {
+        if (f == null || f.height <= 0) return null
+        val tier = when { f.height >= 2160 -> "UHD"; f.height >= 720 -> "HD"; else -> "SD" }
+        val parts = mutableListOf("$tier ${f.width}x${f.height}")
+        if (f.frameRate > 0) parts += "${fmtNum(f.frameRate)} fps"
+        codecName(f.sampleMimeType)?.let { parts += it }
+        if (f.bitrate > 0) parts += "%.1f Mbps".format(f.bitrate / 1_000_000f)
+        return parts.joinToString(" · ")
+    }
+
+    private fun audioInfo(f: Format?): String? {
+        if (f == null) return null
+        val parts = mutableListOf<String>()
+        f.language?.takeIf { it != "und" }?.let { parts += langName(it) }
+        val codec = codecName(f.sampleMimeType)
+        val layout = when (f.channelCount) { 1 -> "mono"; 2 -> "stereo"; 6 -> "5.1"; 8 -> "7.1"; else -> if (f.channelCount > 0) "${f.channelCount}ch" else null }
+        parts += listOfNotNull(codec, layout).joinToString(" ")
+        if (f.bitrate > 0) parts += "${f.bitrate / 1000} kbps"
+        return parts.filter { it.isNotEmpty() }.joinToString(" · ").ifEmpty { null }
+    }
+
+    private fun fmtNum(v: Float) = if (v == v.toInt().toFloat()) v.toInt().toString() else "%.2f".format(v)
+
+    private fun langName(code: String) = when (code.lowercase()) {
+        "nl", "nld", "dut", "ned" -> "NL"
+        "en", "eng" -> "EN"
+        else -> code.uppercase()
+    }
+
+    private fun codecName(mime: String?) = when (mime) {
+        MimeTypes.VIDEO_H264 -> "H.264"
+        MimeTypes.VIDEO_H265 -> "HEVC"
+        MimeTypes.VIDEO_MPEG2 -> "MPEG-2"
+        MimeTypes.AUDIO_AAC -> "AAC"
+        MimeTypes.AUDIO_AC3 -> "AC-3"
+        MimeTypes.AUDIO_E_AC3, MimeTypes.AUDIO_E_AC3_JOC -> "E-AC-3"
+        MimeTypes.AUDIO_MPEG_L2 -> "MP2"
+        MimeTypes.AUDIO_MPEG -> "MP3"
+        else -> null
     }
 
     /** Fills the program rows of the banner for [ch]; clears them when [ch] is null or has no guide data. */
