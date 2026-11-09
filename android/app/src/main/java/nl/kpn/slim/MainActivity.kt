@@ -79,6 +79,8 @@ class MainActivity : Activity(), LifecycleOwner {
     private lateinit var rowStartOver: View
     private lateinit var rowLive: View
     private lateinit var info: View
+    private lateinit var infoScroll: View
+    private lateinit var infoStartOver: View
     private lateinit var osdLogo: ImageView
     private lateinit var infoImage: ImageView
     private lateinit var infoTitle: TextView
@@ -89,6 +91,8 @@ class MainActivity : Activity(), LifecycleOwner {
     private lateinit var settings: View
     private lateinit var rowHighBw: View
     private lateinit var rowBanner: View
+    private lateinit var rowLogos: View
+    private lateinit var valueLogos: TextView
     private lateinit var valueHighBw: TextView
     private lateinit var valueBanner: TextView
 
@@ -107,6 +111,7 @@ class MainActivity : Activity(), LifecycleOwner {
     private var loaderJob: Job? = null
     private var pausedJob: Job? = null
     private var lastBackAt = 0L
+    private var lastStopAt = 0L
     private var exitToast: Toast? = null
     private var lastSeekAt = 0L
     private var seekStep = 0
@@ -128,6 +133,11 @@ class MainActivity : Activity(), LifecycleOwner {
     private var highBandwidthStart: Boolean
         get() = prefs.getBoolean("highBandwidthStart", false)
         set(v) = prefs.edit().putBoolean("highBandwidthStart", v).apply()
+
+    /** Channel logos in the channel list and the banner. */
+    private var showLogos: Boolean
+        get() = prefs.getBoolean("showLogos", true)
+        set(v) = prefs.edit().putBoolean("showLogos", v).apply()
 
     /** How long the info banner stays up after zapping / Info, in seconds. */
     private var bannerSeconds: Int
@@ -160,6 +170,9 @@ class MainActivity : Activity(), LifecycleOwner {
         rowStartOver = findViewById(R.id.row_startover)
         rowLive = findViewById(R.id.row_live)
         info = findViewById(R.id.info)
+        infoScroll = findViewById(R.id.info_scroll)
+        infoStartOver = findViewById(R.id.info_startover)
+        infoStartOver.setOnClickListener { hideInfo(); startOver() }
         osdLogo = findViewById(R.id.osd_logo)
         infoImage = findViewById(R.id.info_image)
         infoTitle = findViewById(R.id.info_title)
@@ -176,6 +189,9 @@ class MainActivity : Activity(), LifecycleOwner {
         settings = findViewById(R.id.settings)
         rowHighBw = findViewById(R.id.row_highbw)
         rowBanner = findViewById(R.id.row_banner)
+        rowLogos = findViewById(R.id.row_logos)
+        valueLogos = findViewById(R.id.value_logos)
+        rowLogos.setOnClickListener { adjustSetting(rowLogos, 1) }
         valueHighBw = findViewById(R.id.value_highbw)
         valueBanner = findViewById(R.id.value_banner)
         rowHighBw.setOnClickListener { adjustSetting(rowHighBw, 1) }
@@ -240,7 +256,7 @@ class MainActivity : Activity(), LifecycleOwner {
             val result = withContext(Dispatchers.IO) { runCatching { avs.liveChannels() } }
             result.onSuccess { list ->
                 channels = list
-                adapter = ChannelAdapter(list, logos, epg, onSettings = { hideList(); showSettings() }) { i -> hideList(); tune(i, debounce = false) }
+                adapter = ChannelAdapter(list, logos, epg, showLogos = { showLogos }, onSettings = { hideList(); showSettings() }) { i -> hideList(); tune(i, debounce = false) }
                 this@MainActivity.list.adapter = adapter
                 hideStatus()
                 val last = prefs.getInt("lastChannelId", -1)
@@ -349,7 +365,8 @@ class MainActivity : Activity(), LifecycleOwner {
         if (info.visibility == View.VISIBLE) {
             when (code) {
                 KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_PROG_GREEN -> hideInfo()
-                else -> return super.dispatchKeyEvent(event) // up/down scroll the text
+                KeyEvent.KEYCODE_PROG_RED -> { hideInfo(); startOver() }
+                else -> return super.dispatchKeyEvent(event) // up/down scroll the text, OK presses the button
             }
             return true
         }
@@ -488,23 +505,37 @@ class MainActivity : Activity(), LifecycleOwner {
         channels.getOrNull(current)?.let(::showOsd)
     }
 
-    /** Stop: back to live when behind or paused; when already live it asks to exit, like Back. */
+    /** Stop: guarded. Behind live or paused, the first press asks, a second one within [STOP_WINDOW_MS] goes live. */
     private fun stopKey() {
-        val p = player
-        val behind = secondsBehindLive() >= 3 || timeshiftBase != null || p?.playWhenReady == false
-        if (behind) goLive() else confirmExit()
+        val behind = secondsBehindLive() >= 3 || timeshiftBase != null || player?.playWhenReady == false
+        if (!behind) { hint("You are watching live TV"); return }
+        val now = System.currentTimeMillis()
+        if (now - lastStopAt < STOP_WINDOW_MS) {
+            lastStopAt = 0
+            hint(null)
+            goLive()
+        } else {
+            lastStopAt = now
+            hint("Press stop again to return to live TV")
+        }
     }
 
     /** First press shows a hint, a second one within [EXIT_WINDOW_MS] leaves the app. */
     private fun confirmExit() {
         val now = System.currentTimeMillis()
         if (now - lastBackAt < EXIT_WINDOW_MS) {
-            exitToast?.cancel()
+            hint(null)
             finish()
             return
         }
         lastBackAt = now
-        exitToast = Toast.makeText(this, "Press back again to exit", Toast.LENGTH_SHORT).also { it.show() }
+        hint("Press back again to exit")
+    }
+
+    /** One short toast at a time; null just dismisses the current one. */
+    private fun hint(msg: String?) {
+        exitToast?.cancel()
+        exitToast = msg?.let { Toast.makeText(this, it, Toast.LENGTH_SHORT).also { t -> t.show() } }
     }
 
     /** Seconds the viewer is behind the live edge (paused or started over); 0 when live or unknown. */
@@ -639,9 +670,11 @@ class MainActivity : Activity(), LifecycleOwner {
             ).joinToString("\n")
             infoCredits.visibility = if (infoCredits.text.isEmpty()) View.GONE else View.VISIBLE
         }
-        info.scrollTo(0, 0)
+        infoScroll.scrollTo(0, 0)
+        infoStartOver.visibility = if (prog?.startOver == true) View.VISIBLE else View.GONE
         info.visibility = View.VISIBLE
-        info.requestFocus()
+        // The button is the default focus when offered; Up moves to the text, which then scrolls.
+        (if (prog?.startOver == true) infoStartOver else infoScroll).requestFocus()
     }
 
     private fun hideInfo() {
@@ -661,6 +694,7 @@ class MainActivity : Activity(), LifecycleOwner {
 
     private fun renderSettings() {
         valueHighBw.text = if (highBandwidthStart) "On" else "Off"
+        valueLogos.text = if (showLogos) "On" else "Off"
         val s = bannerSeconds
         valueBanner.text = "${if (s > MIN_BANNER_S) "◀ " else "   "}$s s${if (s < MAX_BANNER_S) " ▶" else "   "}"
     }
@@ -675,6 +709,11 @@ class MainActivity : Activity(), LifecycleOwner {
                 buildPlayer()
                 if (current >= 0) tune(current, debounce = false)
                 osd.visibility = View.GONE
+            }
+            R.id.row_logos -> {
+                showLogos = !showLogos
+                adapter?.notifyDataSetChanged()
+                channels.getOrNull(current)?.let { bindGuide(it) }
             }
             R.id.row_banner -> {
                 val s = bannerSeconds
@@ -749,7 +788,17 @@ class MainActivity : Activity(), LifecycleOwner {
         group(streamVideo)
         if (streamVideo.isNotEmpty() && streamAudio.isNotEmpty()) sb.append("   |   ")
         group(streamAudio)
+        val appearing = osdStream.text.isEmpty() && sb.isNotEmpty()
         osdStream.text = sb
+        if (appearing) {
+            // First info for a new stream: fade in instead of popping in.
+            osdStream.animate().cancel()
+            osdStream.alpha = 0f
+            osdStream.animate().alpha(1f).setDuration(STREAM_FADE_MS).start()
+        } else if (sb.isEmpty()) {
+            osdStream.animate().cancel()
+            osdStream.alpha = 1f
+        }
     }
 
     private fun videoParts(f: Format?): List<Pair<String, String>> {
@@ -805,7 +854,7 @@ class MainActivity : Activity(), LifecycleOwner {
             behindSec >= 3 -> "  (-$behindSec s)"
             else -> ""
         }
-        logos.load(ch?.logoUrl, osdLogo)
+        logos.load(ch?.logoUrl.takeIf { showLogos }, osdLogo)
         osdTitle.text = now?.title.orEmpty()
         osdTime.text = now?.let { "${epg.time(it.startMs)} – ${epg.time(it.endMs)}" }.orEmpty()
         osdNext.text = next?.let { "Volgend: ${it.title}" }.orEmpty()
@@ -829,6 +878,8 @@ class MainActivity : Activity(), LifecycleOwner {
         private const val MAX_BANNER_S = 15
         private const val LOADER_DELAY_MS = 1000L
         private const val EXIT_WINDOW_MS = 2000L
+        private const val STOP_WINDOW_MS = 2500L
+        private const val STREAM_FADE_MS = 700L
         private const val SEEK_REPEAT_MS = 1500L
         /** Seek step in seconds; each quick repeat of the key moves one step up the ladder. */
         private val SEEK_STEPS_S = longArrayOf(10, 30, 60, 120, 300)

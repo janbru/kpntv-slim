@@ -206,16 +206,23 @@
     </LinearLayout>
 
     <!-- Programme info -->
-    <ScrollView
+    <LinearLayout
         android:id="@+id/info"
         android:layout_width="900dp"
         android:layout_height="440dp"
         android:layout_gravity="center"
         android:background="@drawable/osd_bg"
-        android:focusable="true"
+        android:orientation="vertical"
         android:padding="28dp"
-        android:scrollbars="none"
         android:visibility="gone">
+
+    <ScrollView
+        android:id="@+id/info_scroll"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:focusable="true"
+        android:scrollbars="none">
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -281,6 +288,15 @@
         </LinearLayout>
     </ScrollView>
 
+    <TextView
+        android:id="@+id/info_startover"
+        style="@style/OptionRow"
+        android:layout_width="320dp"
+        android:layout_marginTop="12dp"
+        android:text="Start from beginning"
+        android:visibility="gone" />
+    </LinearLayout>
+
     <!-- Settings panel (list header row, or the Settings key) -->
     <LinearLayout
         android:id="@+id/settings"
@@ -321,6 +337,33 @@
 
             <TextView
                 android:id="@+id/value_highbw"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@android:color/white"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/row_logos"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:background="@drawable/item_bg"
+            android:focusable="true"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="16dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Show channel logos"
+                android:textColor="@android:color/white"
+                android:textSize="18sp" />
+
+            <TextView
+                android:id="@+id/value_logos"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:textColor="@android:color/white"

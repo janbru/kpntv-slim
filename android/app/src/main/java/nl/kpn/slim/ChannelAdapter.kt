@@ -15,6 +15,7 @@ class ChannelAdapter(
     private val channels: List<Channel>,
     private val logos: LogoLoader,
     private val epg: Epg,
+    private val showLogos: () -> Boolean,
     private val onSettings: () -> Unit,
     private val onPick: (Int) -> Unit,
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
@@ -61,7 +62,7 @@ class ChannelAdapter(
         h.name.text = ch.name
         h.now.text = epg.nowLine(ch.id).orEmpty()
         h.itemView.isActivated = index == playingIndex
-        logos.load(ch.logoUrl, h.logo)
+        logos.load(ch.logoUrl.takeIf { showLogos() }, h.logo)
         h.itemView.setOnClickListener {
             val i = h.bindingAdapterPosition - HEADER
             if (i >= 0) onPick(i)
