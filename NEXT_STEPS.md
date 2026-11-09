@@ -1,10 +1,10 @@
 # KPN TV+ slim: project state & next steps
 
-Last updated: 2026-11-09 (session 7). Read this first when resuming.
+Last updated: 2026-11-09 (end of session 7). Read this first when resuming.
 
-## Status: native app works on the TV (v0.9)
+## Status: native app works on the TV (v0.10)
 
-Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kpn.slim`, label "KPN Slim"). Release APK about 1.2 MB. The git repo is local only (17 commits on `main`, plus the one that updates this line). New in v0.9 (session 6): a full TV guide grid and catch-up of earlier programmes, the buffering spinner now waits 1.5 s. New in v0.8 (session 5): one-time sign-in with abonnementsnummer + pincode (no more hardcoded deviceId), new icon and banner, in-app hint pill, Settings row with icon in the channel list.
+Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kpn.slim`, label "KPN Slim"). Release APK about 1.2 MB. The git repo is local only (22 commits on `main`, counting the one that updates this line). New in v0.10 (session 7): audio and subtitle picker on Yellow, the skipped time shown while seeking, stream stats overlay on Blue, resume at the paused position after an expired play URL (built, not verified on the TV). New in v0.9 (session 6): a full TV guide grid and catch-up of earlier programmes, the buffering spinner now waits 1.5 s. New in v0.8 (session 5): one-time sign-in with abonnementsnummer + pincode (no more hardcoded deviceId), new icon and banner, in-app hint pill, Settings row with icon in the channel list.
 
 ### Build, install, setup
 - Build: `cd android && ./gradlew assembleRelease` (JDK 21 pinned in `gradle.properties`; Homebrew's default JDK 26 breaks Gradle 8.14). To build without the optional account/deviceId seed (what a fresh user gets, and what is on the TV now): add `-Pkpn.account= -Pkpn.deviceId=`.
@@ -89,6 +89,7 @@ Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kp
 - Press keys one at a time and screenshot; the banner hides itself after the configured duration.
 
 ### Known gaps / next ideas
+Suggested order for the next session (agreed with the user in session 7): (1) handle an `AuthException` mid-session (show the sign-in instead of only a player error) together with a sign-out / switch account row in Settings; (2) device limit check and cleanup via `USER/DEVICES`; (3) a seek bar with trick-play thumbnails (research below); (4) channel favourites (Up/Down skip the rest), a guide-wide search, and reminders for programmes, all mostly local data.
 - TV guide ideas: channel logos in the grid (the logos setting is ignored there), jump to a channel by number, jump to a day, a search, reminders. Programme artwork in the list rows.
 - Recordings/CPVR, out-of-home.
 - **Trick-play thumbnails while scrubbing** (researched in session 7, not built; needs a seek bar first, there is no seeking UI yet). The live manifests carry a DASH-IF trick-mode adaptation set (`EssentialProperty http://dashif.org/guidelines/trickmode`, `value` = the main video set, `frameRate="25/48"`, `maxPlayoutRate="96"`). It is plain H.264 video, not JPEG sprite sheets: one I-frame per 1.92 s segment, renditions `video=384000(mode=trik)` (320x180, 134 kbps) up to 1400000 and above (1280 wide). Segment names follow the main video's timeline: `{ch}-video=384000(mode=trik)-{t}.dash` with init `{ch}-video=384000(mode=trik).dash`, relative to the manifest's `dash/` folder, with the manifest's `?token=...` query appended. **Not encrypted** (no `encv`/`tenc`/`pssh`), so init + one segment concatenated is a valid single-frame MP4; ffmpeg decodes it, and a 320x180 segment is only about 9 to 10 KB. In the app: fetch init once, a segment per cursor position, decode with `MediaMetadataRetriever` (via a temp file or `MediaDataSource`) or `MediaCodec`, cache a few frames. ExoPlayer itself ignores these tracks.
