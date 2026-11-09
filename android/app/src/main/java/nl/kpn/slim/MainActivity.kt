@@ -62,7 +62,7 @@ class MainActivity : Activity(), LifecycleOwner {
     private lateinit var osdNext: TextView
     private lateinit var osdProgress: ProgressBar
     private lateinit var status: TextView
-    private lateinit var paused: View
+    private lateinit var paused: View // pause icon
     private lateinit var options: View
     private lateinit var rowPause: TextView
     private lateinit var rowStartOver: View
@@ -91,6 +91,10 @@ class MainActivity : Activity(), LifecycleOwner {
     private var digits = ""
     private var retriedCurrent = false
     private var noticeJob: Job? = null
+
+    /** Wall-clock start of the stream when watching a started-over programme; null when live. */
+    private var timeshiftBase: Long? = null
+    private var timeshiftReady = false
 
     private val prefs by lazy { getSharedPreferences("slim", MODE_PRIVATE) }
 
@@ -137,6 +141,7 @@ class MainActivity : Activity(), LifecycleOwner {
         rowStartOver.setOnClickListener { hideOptions(); startOver() }
         rowLive.setOnClickListener { hideOptions(); goLive() }
         findViewById<View>(R.id.row_info).setOnClickListener { hideOptions(); showInfo() }
+        findViewById<View>(R.id.row_channels).setOnClickListener { hideOptions(); showList() }
         findViewById<View>(R.id.row_settings).setOnClickListener { hideOptions(); showSettings() }
         settings = findViewById(R.id.settings)
         rowHighBw = findViewById(R.id.row_highbw)
@@ -225,6 +230,8 @@ class MainActivity : Activity(), LifecycleOwner {
         val i = Math.floorMod(index, channels.size)
         if (i != current) { previous = current; retriedCurrent = false }
         current = i
+        timeshiftBase = startOverAt
+        timeshiftReady = false
         adapter?.playingIndex = i
         val ch = channels[i]
         prefs.edit().putInt("lastChannelId", ch.id).apply()
@@ -279,7 +286,7 @@ class MainActivity : Activity(), LifecycleOwner {
         override fun onTracksChanged(tracks: Tracks) = bindStream()
 
         override fun onPlaybackStateChanged(state: Int) {
-            if (state == Player.STATE_READY) { retriedCurrent = false; hideStatus() }
+            if (state == Player.STATE_READY) { retriedCurrent = false; timeshiftReady = true; hideStatus() }
         }
     }
 
@@ -333,7 +340,9 @@ class MainActivity : Activity(), LifecycleOwner {
         when (code) {
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> tune(current + 1)
             KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> tune(current - 1)
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER,
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                if (channels.isEmpty()) loadChannels() else showOptions()
+            }
             KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_GUIDE -> {
                 if (channels.isEmpty()) loadChannels() else showList()
             }
@@ -383,6 +392,7 @@ class MainActivity : Activity(), LifecycleOwner {
 
     /** Seconds the viewer is behind the live edge (paused or started over); 0 when live or unknown. */
     private fun secondsBehindLive(): Long {
+        timeshiftBase?.let { return (System.currentTimeMillis() - playedAt()).coerceAtLeast(0) / 1000 }
         val p = player ?: return 0
         val off = p.currentLiveOffset
         if (off == C.TIME_UNSET || off < 0) return 0
@@ -393,8 +403,14 @@ class MainActivity : Activity(), LifecycleOwner {
         return (off - target).coerceAtLeast(0) / 1000
     }
 
-    /** Wall-clock moment currently on screen. */
-    private fun playedAt() = System.currentTimeMillis() - secondsBehindLive() * 1000
+    /**
+     * Wall-clock moment currently on screen. For a started-over stream the manifest begins at the programme
+     * start, so it is that start plus the playback position; before the first frame the position is stale.
+     */
+    private fun playedAt(): Long {
+        timeshiftBase?.let { base -> return base + if (timeshiftReady) (player?.currentPosition ?: 0L) else 0L }
+        return System.currentTimeMillis() - secondsBehindLive() * 1000
+    }
 
     private fun startOver() {
         val ch = channels.getOrNull(current) ?: return

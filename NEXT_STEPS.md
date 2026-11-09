@@ -9,7 +9,7 @@ App lives in `android/` (package `nl.kpn.slim`, label "KPN Slim"). Release APK 1
 - Install: `adb -s 192.168.2.21:5555 install -r app/build/outputs/apk/release/app-release.apk` (signed with the debug keystore; installs alongside the official app).
 - Account + deviceId come from `android/gradle.properties` (`kpn.account`, `kpn.deviceId`) into BuildConfig.
 - Code: `AvsClient.kt` (EAR → SESSIONS → LIVECHANNELS → VIDEOURL, HttpURLConnection + org.json, cookie/xsrf rotation, 3h session refresh + retry once), `MainActivity.kt` (ExoPlayer DASH + Widevine, zap/list/digits/OSD), `ChannelAdapter.kt`, `LogoLoader.kt`.
-- Remote: Up/Down or CH± zap, digits = channel number, OK/Menu/Left = channel list, Right/Info = banner, Back closes list/exits. Remembers last channel.
+- Remote: Up/Down or CH± zap, digits = channel number, OK = options menu, Menu/Left/Guide = channel list, Right/Info = banner (press again = options menu), Back closes overlay/exits. Remembers last channel.
 - Verified on TV: session, 108 channels, Widevine playback, zapping, list overlay.
 
 ### v0.2: EPG now/next (done 2026-11-09)
@@ -22,8 +22,10 @@ Bottom info banner shows live video/audio stream info. Settings: first row of th
 - **Start over needs no new endpoint**: `VIDEOURL/LIVE/{ch}/{asset}?time={programStartMs}` (exact ms, not rounded) returns a manifest that begins at that moment (the response URL carries `&t=<ISO time>`). The USP window reaches back about 6 h (tried 10 min to 3 days, anything older is clamped). Played with `setMediaItem(item, 0)`. Programmes carry `contentOptions: STARTOVER`; the app only offers it when that flag is set. After a restart the banner shows `(-N min)`, progress follows the playback position (`now - currentLiveOffset + target offset`), and "Go to live" appears.
 - Careful when testing with curl: AVS rotates the xsrf/cookies, so a second call with the first session's cookie fails with `403-10110 Token not found`. Create a fresh session per call.
 - Pause: Play/Pause, Pause and Play media keys (and Space). Paused indicator top right.
-- Options menu: press Right or Info a second time while the banner is showing (Pause/Play, Start from beginning, Go to live, Programme info, Settings). Red = start over, Green = programme info.
+- Options menu: OK, or Right/Info a second time while the banner is showing (Pause/Play, Start from beginning, Go to live, Programme info, Channel list, Settings). Red = start over, Green = programme info.
 - Programme info panel: title, season/episode, time, genres, year, age rating, description, presenters/directors/cast (all from the EPG response).
+
+- When not live, the banner and info panel describe the programme being *played* (`timeshiftBase + currentPosition`), not the live one. `Epg.replace` merges refreshes and keeps programmes that ended up to 6 h ago so a started-over programme keeps its info after it has left the live guide.
 
 ### Known gaps / next ideas
 - **Channel logos don't load**: `images.tv.kpn.com/{logoMedium}` (e.g. `size_x/dtvchannels_1_100x50.png`) returns 404. The real URL pattern needs a recapture with `--allow-hosts` including `images\.tv\.kpn\.com` (libapp.so has a `/logo/` path segment). Views collapse gracefully meanwhile.

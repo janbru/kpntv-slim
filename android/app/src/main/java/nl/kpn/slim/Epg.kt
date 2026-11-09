@@ -10,9 +10,22 @@ class Epg {
     private var loadedAt = 0L
     private val clock = SimpleDateFormat("HH:mm", Locale.getDefault())
 
+    /**
+     * Merges a fresh fetch into what we have. Fresh data wins per start time, and programmes that ended
+     * up to [KEEP_PAST_MS] ago are kept: someone watching a started-over programme must still see its info.
+     */
     fun replace(data: Map<Int, List<Program>>) {
-        byChannel = data
-        loadedAt = System.currentTimeMillis()
+        val now = System.currentTimeMillis()
+        val keepAfter = now - KEEP_PAST_MS
+        val merged = HashMap<Int, List<Program>>(data.size * 2)
+        for (id in data.keys + byChannel.keys) {
+            val fresh = data[id].orEmpty()
+            val freshStarts = fresh.mapTo(HashSet()) { it.startMs }
+            val old = byChannel[id].orEmpty().filter { it.endMs > keepAfter && it.startMs !in freshStarts }
+            merged[id] = (old + fresh).sortedBy { it.startMs }
+        }
+        byChannel = merged
+        loadedAt = now
     }
 
     fun isStale() = System.currentTimeMillis() - loadedAt > REFRESH_MS
@@ -36,5 +49,6 @@ class Epg {
 
     companion object {
         const val REFRESH_MS = 15L * 60 * 1000
+        private const val KEEP_PAST_MS = 6L * 3_600_000 // the start-over window is about 6 h deep
     }
 }
