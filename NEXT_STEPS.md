@@ -15,6 +15,9 @@ App lives in `android/` (package `nl.kpn.slim`, label "KPN Slim"). Release APK 1
 ### v0.2: EPG now/next (done 2026-11-09)
 `AvsClient.epg()` does one `GET /TRAY/EPG?filter_startTime={now}&filter_endTime={now+3h}&filter_channelIds={all ids}&outputFormat=EXTENDED` (~400 KB, ~0.4 s, all 108 channels). Response: `containers[]` per channel (`metadata.channelId`) with nested `containers[]` programs (`metadata.title/airingStartTime/airingEndTime`, also `pictureUrl`, `longDescription`). `Epg.kt` holds it in memory (refresh when older than 15 min, on OSD/list open); list rows show the current program, the banner shows now + next. Verified on the TV.
 
+### v0.3: stream info banner + settings (2026-11-09)
+Bottom info banner shows live video/audio stream info. Settings: first row of the channel list (OK/centre, then Left/Right/OK to change, Back to close). "High bandwidth start" (default off) gives ExoPlayer a 20 Mbps initial bandwidth estimate so it starts at 1080p50/8 Mbps instead of ramping up; "Info banner duration" 1-15 s (default 5). Both live in SharedPreferences `slim`. Info banner keys: Right / Info. The TV's system intercepts the Settings key, so settings are reached via the list.
+
 ### Known gaps / next ideas
 - **Channel logos don't load**: `images.tv.kpn.com/{logoMedium}` (e.g. `size_x/dtvchannels_1_100x50.png`) returns 404. The real URL pattern needs a recapture with `--allow-hosts` including `images\.tv\.kpn\.com` (libapp.so has a `/logo/` path segment). Views collapse gracefully meanwhile.
 - deviceId is hardcoded to this TV; deriving it on-device would make the app portable.

@@ -20,6 +20,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -60,6 +61,11 @@ class MainActivity : Activity(), LifecycleOwner {
     private lateinit var osdNext: TextView
     private lateinit var osdProgress: ProgressBar
     private lateinit var status: TextView
+    private lateinit var settings: View
+    private lateinit var rowHighBw: View
+    private lateinit var rowBanner: View
+    private lateinit var valueHighBw: TextView
+    private lateinit var valueBanner: TextView
 
     private var player: ExoPlayer? = null
     private var channels: List<Channel> = emptyList()
@@ -74,6 +80,16 @@ class MainActivity : Activity(), LifecycleOwner {
     private var retriedCurrent = false
 
     private val prefs by lazy { getSharedPreferences("slim", MODE_PRIVATE) }
+
+    /** Start playback at the top quality instead of ramping up from the lowest (like the official app's flag). */
+    private var highBandwidthStart: Boolean
+        get() = prefs.getBoolean("highBandwidthStart", false)
+        set(v) = prefs.edit().putBoolean("highBandwidthStart", v).apply()
+
+    /** How long the info banner stays up after zapping / Info, in seconds. */
+    private var bannerSeconds: Int
+        get() = prefs.getInt("bannerSeconds", 5).coerceIn(MIN_BANNER_S, MAX_BANNER_S)
+        set(v) = prefs.edit().putInt("bannerSeconds", v.coerceIn(MIN_BANNER_S, MAX_BANNER_S)).apply()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -93,6 +109,13 @@ class MainActivity : Activity(), LifecycleOwner {
         osdNext = findViewById(R.id.osd_next)
         osdProgress = findViewById(R.id.osd_progress)
         status = findViewById(R.id.status)
+        settings = findViewById(R.id.settings)
+        rowHighBw = findViewById(R.id.row_highbw)
+        rowBanner = findViewById(R.id.row_banner)
+        valueHighBw = findViewById(R.id.value_highbw)
+        valueBanner = findViewById(R.id.value_banner)
+        rowHighBw.setOnClickListener { adjustSetting(rowHighBw, 1) }
+        rowBanner.setOnClickListener { adjustSetting(rowBanner, 1) }
         list.layoutManager = LinearLayoutManager(this)
         logos = LogoLoader(lifecycleScope)
 
@@ -102,12 +125,28 @@ class MainActivity : Activity(), LifecycleOwner {
     override fun onStart() {
         super.onStart()
         registry.currentState = Lifecycle.State.STARTED
-        player = ExoPlayer.Builder(this).build().also { p ->
+        buildPlayer()
+        if (current >= 0) tune(current, debounce = false)
+    }
+
+    private fun buildPlayer() {
+        val builder = ExoPlayer.Builder(this)
+        if (highBandwidthStart) {
+            // A generous initial estimate makes adaptive selection pick the top rendition (8 Mbps) right away.
+            builder.setBandwidthMeter(DefaultBandwidthMeter.Builder(this).setInitialBitrateEstimate(HIGH_START_BPS).build())
+        }
+        player = builder.build().also { p ->
             p.playWhenReady = true
             p.addListener(playerListener)
             playerView.player = p
         }
-        if (current >= 0) tune(current, debounce = false)
+    }
+
+    private fun releasePlayer() {
+        tuneJob?.cancel()
+        playerView.player = null
+        player?.release()
+        player = null
     }
 
     override fun onResume() {
@@ -121,10 +160,7 @@ class MainActivity : Activity(), LifecycleOwner {
     }
 
     override fun onStop() {
-        tuneJob?.cancel()
-        playerView.player = null
-        player?.release()
-        player = null
+        releasePlayer()
         registry.currentState = Lifecycle.State.CREATED
         super.onStop()
     }
@@ -140,7 +176,7 @@ class MainActivity : Activity(), LifecycleOwner {
             val result = withContext(Dispatchers.IO) { runCatching { avs.liveChannels() } }
             result.onSuccess { list ->
                 channels = list
-                adapter = ChannelAdapter(list, logos, epg) { i -> hideList(); tune(i, debounce = false) }
+                adapter = ChannelAdapter(list, logos, epg, onSettings = { hideList(); showSettings() }) { i -> hideList(); tune(i, debounce = false) }
                 this@MainActivity.list.adapter = adapter
                 hideStatus()
                 val last = prefs.getInt("lastChannelId", -1)
@@ -221,6 +257,18 @@ class MainActivity : Activity(), LifecycleOwner {
         if (event.action != KeyEvent.ACTION_DOWN) return super.dispatchKeyEvent(event)
         val code = event.keyCode
 
+        if (settings.visibility == View.VISIBLE) {
+            when (code) {
+                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_SETTINGS -> hideSettings()
+                KeyEvent.KEYCODE_DPAD_LEFT -> currentFocus?.let { adjustSetting(it, -1) }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> currentFocus?.let { adjustSetting(it, 1) }
+                else -> return super.dispatchKeyEvent(event)
+            }
+            return true
+        }
+
+        if (code == KeyEvent.KEYCODE_SETTINGS) { showSettings(); return true }
+
         if (list.visibility == View.VISIBLE) {
             if (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_MENU) { hideList(); return true }
             return super.dispatchKeyEvent(event)
@@ -281,13 +329,49 @@ class MainActivity : Activity(), LifecycleOwner {
         val target = current.coerceAtLeast(0)
         // Height is only known after the first layout, so position in a post.
         list.post {
-            (list.layoutManager as LinearLayoutManager).scrollToPositionWithOffset(target, list.height / 3)
-            list.post { list.findViewHolderForAdapterPosition(target)?.itemView?.requestFocus() }
+            (list.layoutManager as LinearLayoutManager).scrollToPositionWithOffset(target + ChannelAdapter.HEADER, list.height / 3)
+            list.post { list.findViewHolderForAdapterPosition(target + ChannelAdapter.HEADER)?.itemView?.requestFocus() }
         }
     }
 
     private fun hideList() {
         list.visibility = View.GONE
+    }
+
+    private fun showSettings() {
+        osd.visibility = View.GONE
+        renderSettings()
+        settings.visibility = View.VISIBLE
+        rowHighBw.requestFocus()
+    }
+
+    private fun hideSettings() {
+        settings.visibility = View.GONE
+    }
+
+    private fun renderSettings() {
+        valueHighBw.text = if (highBandwidthStart) "On" else "Off"
+        val s = bannerSeconds
+        valueBanner.text = "${if (s > MIN_BANNER_S) "◀ " else "   "}$s s${if (s < MAX_BANNER_S) " ▶" else "   "}"
+    }
+
+    /** [dir] is -1 (Left), +1 (Right / OK). The banner duration wraps around on OK past the maximum. */
+    private fun adjustSetting(row: View, dir: Int) {
+        when (row.id) {
+            R.id.row_highbw -> {
+                highBandwidthStart = !highBandwidthStart
+                // The bandwidth meter is fixed at player creation, so rebuild and re-tune.
+                releasePlayer()
+                buildPlayer()
+                if (current >= 0) tune(current, debounce = false)
+                osd.visibility = View.GONE
+            }
+            R.id.row_banner -> {
+                val s = bannerSeconds
+                bannerSeconds = if (s >= MAX_BANNER_S && dir > 0) MIN_BANNER_S else s + dir
+            }
+        }
+        renderSettings()
     }
 
     private fun showOsd(ch: Channel) {
@@ -298,7 +382,7 @@ class MainActivity : Activity(), LifecycleOwner {
         if (epg.isStale()) refreshEpg()
         osd.visibility = View.VISIBLE
         osdJob?.cancel()
-        osdJob = lifecycleScope.launch { delay(5000); osd.visibility = View.GONE }
+        osdJob = lifecycleScope.launch { delay(bannerSeconds * 1000L); osd.visibility = View.GONE }
     }
 
     /** "HD 1920x1080 · 50 fps · H.264 · 8.0 Mbps   |   NL · AC-3 5.1 · 384 kbps" for what is actually playing. */
@@ -371,5 +455,11 @@ class MainActivity : Activity(), LifecycleOwner {
 
     private fun hideStatus() {
         status.visibility = View.GONE
+    }
+
+    companion object {
+        private const val MIN_BANNER_S = 1
+        private const val MAX_BANNER_S = 15
+        private const val HIGH_START_BPS = 20_000_000L
     }
 }
