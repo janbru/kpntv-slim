@@ -1177,11 +1177,10 @@ class MainActivity : Activity(), LifecycleOwner {
     private fun trackKey(f: Format) = "${f.language}|${f.sampleMimeType}|${f.channelCount}|${f.roleFlags}"
 
     private fun languageName(f: Format): String {
-        // The manifest label is often a bare code ("Ned"), so the language name comes first.
-        val tag = f.language?.takeIf { it != C.LANGUAGE_UNDETERMINED }
-            ?: return f.label?.takeIf { it.isNotBlank() } ?: "Unknown language"
-        return Locale.forLanguageTag(tag).getDisplayLanguage(Locale.ENGLISH).ifBlank { f.label ?: tag }
-            .replaceFirstChar { it.uppercase() }
+        // The manifest's own label ("Ned") is shown as is; the language name is only a fallback.
+        f.label?.takeIf { it.isNotBlank() }?.let { return it }
+        val tag = f.language?.takeIf { it != C.LANGUAGE_UNDETERMINED } ?: return "Unknown language"
+        return Locale.forLanguageTag(tag).getDisplayLanguage(Locale.ENGLISH).ifBlank { tag }.replaceFirstChar { it.uppercase() }
     }
 
     private fun audioLabel(f: Format): String {
