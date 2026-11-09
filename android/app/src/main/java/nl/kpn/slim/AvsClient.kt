@@ -1,5 +1,6 @@
 package nl.kpn.slim
 
+import android.os.Build
 import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -48,7 +49,10 @@ fun channelLogoUrl(externalId: String, height: Int): String? =
 fun programImageUrl(pictureId: String, w: Int, h: Int): String? =
     pictureId.takeIf { it.isNotEmpty() }?.let { "$IMAGE_HOST/epg/$it/${w}x$h.jpg?blurred=false" }
 
-class AvsException(message: String) : IOException(message)
+open class AvsException(message: String, val httpStatus: Int = 0) : IOException(message)
+
+/** The server refused to give this deviceId a session (not registered, or signed out elsewhere). */
+class AuthException(message: String) : AvsException(message)
 
 /**
  * Minimal client for KPN's Nagra/MediaKind AVS backend. See API_CONTRACT.md.
@@ -64,6 +68,18 @@ class AvsClient(
     private var sessionAt = 0L
 
     private val base get() = "https://$avsHost/000002/1.5/A/nld/androidtv/kpn"
+
+    /**
+     * One-time sign-in: registers this client's [deviceId] with the account by presenting the password once.
+     * [account] may be the account number or the e-mail address. Returns the account number (what later
+     * sessions need), taken from the profile in the reply.
+     */
+    @Synchronized
+    fun register(password: String): String {
+        val tan = newSession(password)
+        return tan.ifEmpty { account.takeIf { a -> a.all(Char::isDigit) } }
+            ?: throw AvsException("Signed in, but the reply has no account number")
+    }
 
     @Synchronized
     fun liveChannels(): List<Channel> {
@@ -159,11 +175,16 @@ class AvsClient(
         }
     }
 
-    private fun newSession() {
+    /** Creates a session. With [password] it also registers the deviceId; returns the account number from the profile. */
+    private fun newSession(password: String? = null): String {
         if (avsHost == null) {
-            val ear = request("GET",
-                "https://ausar.tcloud-itv-prd1.prod.aws.kpn.com/public/v1/ear?type=ott&tan=${enc(account)}",
-                body = null, auth = false)
+            val ear = if (password != null && !account.all(Char::isDigit)) {
+                // E-mail sign-in: the AVS host is looked up with the credentials instead of an account number.
+                val creds = JSONObject().put("username", account).put("password", password)
+                request("POST", "$EAR?type=ott", creds.toString(), auth = false)
+            } else {
+                request("GET", "$EAR?type=ott&tan=${enc(account)}", body = null, auth = false)
+            }
             avsHost = ear.getJSONObject("result").getString("url")
         }
         cookies.clear()
@@ -172,17 +193,26 @@ class AvsClient(
             .put("deviceId", deviceId)
             .put("deviceIdType", "DEVICEID")
             .put("deviceType", "androidtv")
-            .put("deviceModel", "PH9M_EA_5599")
-            .put("deviceVendor", "Philips")
-            .put("swVersionId", "STT2.230526.001")
-            .put("deviceFirmVersion", "STT2.230526.001")
+            .put("deviceModel", Build.DEVICE)
+            .put("deviceVendor", Build.MANUFACTURER)
+            .put("swVersionId", Build.ID)
+            .put("deviceFirmVersion", Build.ID)
             .put("appVersion", APP_VERSION)
             .put("serialNumber", "NotAvailable")
             .put("ipAddress", "127.0.0.1")
-        val body = JSONObject().put("credentialsStdAuth", JSONObject().put("deviceInfo", deviceInfo))
-        request("POST", "$base/USER/SESSIONS/", body.toString(), auth = false)
-        if (cookies["avs6_cookie"] == null) throw AvsException("Session refused (no avs6_cookie)")
+        val std = JSONObject().put("deviceInfo", deviceInfo)
+        if (password != null) std.put("username", account).put("password", password).put("remember", true)
+        val body = JSONObject().put("credentialsStdAuth", std)
+        val json = try {
+            request("POST", "$base/USER/SESSIONS/", body.toString(), auth = false)
+        } catch (e: AvsException) {
+            // A reply that says no (HTTP 401/403 or an AVS error code) is an auth problem; 5xx is just a bad moment.
+            if (e.httpStatus == 0 || e.httpStatus in 401..403) throw AuthException(e.message.orEmpty()) else throw e
+        }
+        if (cookies["avs6_cookie"] == null) throw AuthException("Session refused (no avs6_cookie)")
         sessionAt = System.currentTimeMillis()
+        return json.optJSONObject("resultObj")?.optJSONObject("profile")?.optJSONObject("profileData")
+            ?.optString("username").orEmpty()
     }
 
     private fun get(url: String) = request("GET", url, null, auth = true)
@@ -212,7 +242,7 @@ class AvsClient(
             captureSession(conn)
             val text = (if (code < 400) conn.inputStream else conn.errorStream)
                 ?.bufferedReader()?.use { it.readText() }.orEmpty()
-            if (code !in 200..299) throw AvsException("HTTP $code for ${url.substringBefore('?').substringAfterLast("/kpn")}")
+            if (code !in 200..299) throw AvsException("HTTP $code for ${url.substringBefore('?').substringAfterLast("/kpn")}", code)
             val json = JSONObject(text)
             val rc = json.optString("resultCode")
             if (rc.isNotEmpty() && rc != "OK") {
@@ -251,6 +281,7 @@ class AvsClient(
 
     companion object {
         const val APP_VERSION = "09.06.00"
+        private const val EAR = "https://ausar.tcloud-itv-prd1.prod.aws.kpn.com/public/v1/ear"
         /** Logos are shown at most 40 dp high; 100 px is sharp on a 1080p TV and only ~3 KB. */
         const val LOGO_HEIGHT = 100
         private const val SESSION_TTL_MS = 3L * 60 * 60 * 1000 // avs6_cookie lives 4h

@@ -1,6 +1,6 @@
 # KPN TV+ slim: project state & next steps
 
-Last updated: 2026-11-09 (session 4). Read this first when resuming.
+Last updated: 2026-11-09 (session 5). Read this first when resuming.
 
 ## Status: native app works on the TV (v0.7)
 
@@ -9,16 +9,26 @@ Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kp
 ### Build, install, setup
 - Build: `cd android && ./gradlew assembleRelease` (JDK 21 pinned in `gradle.properties`; Homebrew's default JDK 26 breaks Gradle 8.14).
 - Install: `~/Library/Android/sdk/platform-tools/adb -s 192.168.2.21:5555 install -r app/build/outputs/apk/release/app-release.apk` (debug-keystore signed; coexists with the official app). Launch: `adb shell am start -n nl.kpn.slim/.MainActivity`.
-- **`android/gradle.properties` is git-ignored** (account, deviceId, JDK path). On a fresh clone copy `gradle.properties.example` to `gradle.properties` and fill it in. Also ignored: `capture/` (tokens, WireGuard keys), `jadx-out/`, `libs/`, the `.apkm`, `tools/*.jar`, `my-tv.jpg`.
+- **`android/gradle.properties` is git-ignored** (JDK path, and optionally an account + deviceId seed). On a fresh clone copy `gradle.properties.example` to `gradle.properties` and set the JDK path. The `kpn.account` / `kpn.deviceId` seed is optional: without it the app shows a one-time sign-in (see Sign-in below). With it, a fresh install skips the sign-in using that already registered pair; stored values in the app's preferences win over the seed afterwards. Also ignored: `capture/` (tokens, WireGuard keys), `jadx-out/`, `libs/`, the `.apkm`, `tools/*.jar`, `my-tv.jpg`.
 - The web player at tv.kpn.com is a useful reference for URL patterns (its `app.js` is readable); try it before a recapture.
-- FINDINGS.md, API_CONTRACT.md and this file still contain the account number and deviceId in plain text. Redact before sharing the repo or adding a remote.
+- Account number and deviceId are redacted in FINDINGS.md, API_CONTRACT.md and this file (session 5). Locally they live only in the app's private preferences and, optionally, the git-ignored `android/gradle.properties`.
 
 ### Code map (`android/app/src/main/java/nl/kpn/slim/`)
-- `AvsClient.kt`: EAR, SESSIONS, LIVECHANNELS, VIDEOURL, EPG. `HttpURLConnection` + `org.json`, cookie/xsrf rotation, 3 h session refresh, retry once. `Program` carries `pictureId`, description, genres, cast, year, age rating, `startOver` flag.
+- `Identity.kt`: `Identity` (account + deviceId) and `IdentityStore` (SharedPreferences `slim`: `account`, `deviceId`; falls back to the optional BuildConfig seed; `newDeviceId()` makes a random 64-hex SHA-256 id).
+- `AvsClient.kt`: EAR, SESSIONS, LIVECHANNELS, VIDEOURL, EPG, and `register(password)` for the one-time sign-in. A refused session throws `AuthException`. `HttpURLConnection` + `org.json`, cookie/xsrf rotation, 3 h session refresh, retry once. `Program` carries `pictureId`, description, genres, cast, year, age rating, `startOver` flag.
 - `Epg.kt`: in-memory guide. `now/next(channelId, at)`, refresh every 15 min, merges refreshes and keeps programmes that ended up to 6 h ago.
 - `MainActivity.kt`: everything UI. ExoPlayer DASH + Widevine, zapping, overlays (list, options menu, info panel, settings, banner), pause, start over, stream info.
 - `ChannelAdapter.kt`: channel list, first row is "Settings". `LogoLoader.kt`: image loader for logos and programme artwork (byte-capped 12 MB LRU, 4 parallel downloads, hides the view when there is no image).
 - Layout: `res/layout/activity_main.xml` holds all overlays. Colours in `res/values/colors.xml`.
+
+### Sign-in (session 5)
+- A fresh install has no identity, so `MainActivity` shows a sign-in panel (account number or e-mail, password). The app generates its own random deviceId, posts `credentialsStdAuth{username,password,remember,deviceInfo}` to `USER/SESSIONS` once (the same call the KPN web player makes, from its public `app.js`; the web player also invents its own deviceId, a SHA-256 over random input) and stores account number + deviceId. The password is never stored. From then on sessions are minted from the deviceId alone, as before.
+- An e-mail address works too: the EAR lookup is then a POST with the credentials instead of `tan=`. The account number is read back from `profileData.username` in the reply.
+- If KPN refuses the stored deviceId at start-up (`AuthException`), the sign-in panel comes back with a message and registers a new deviceId.
+- `deviceInfo` now comes from the TV (`Build.DEVICE`, `MANUFACTURER`, `ID`), identical to the old hardcoded values on the Philips.
+- **Verified**: the panel renders and the TV keyboard fits above it; the seeded (already registered) path still plays. **Not verified**: a real sign-in with a password (never run, no credentials were used in the session), so whether KPN accepts a new `androidtv` deviceId through the password call, and whether there is a device limit per account, is still open. The web player has `USER/DEVICES` (GET list, DELETE one) if test registrations need cleaning up.
+- To exercise it: comment out `kpn.account` / `kpn.deviceId` in `gradle.properties`, rebuild, and either install over an app without stored identity or run `adb shell pm clear nl.kpn.slim`.
+- No sign-out yet. To switch account, clear the app data.
 
 ### Remote control
 - Up/Down or CH+/CH-: zap. Digits: channel number. Last channel: previous channel.
@@ -64,7 +74,7 @@ Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kp
 - Catch-up of earlier programmes and a full EPG grid (the `TRAY/EPG` endpoint takes any time range; start-over proves play URLs accept past times).
 - Artwork in the channel list rows (small programme thumbnail) or a grid-style EPG.
 - Recordings/CPVR, out-of-home, trick-play thumbnails while scrubbing (no seeking UI yet).
-- deviceId is hardcoded to this TV; deriving it on-device (serial-based SHA-256) would make the app portable.
+- Sign-in is untested with real credentials (see Sign-in). Also missing: a sign-out / switch account entry in Settings, and handling an `AuthException` that happens mid-session (it only shows the player error; restarting the app brings up the sign-in).
 - Long pause: if the manifest token expires the player errors once and the app re-tunes live (not resumed at the paused position).
 
 ## (Previous) RE status: COMPLETE and validated.
@@ -93,7 +103,7 @@ Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kp
 ## Key facts to resume with (also in memory + API_CONTRACT.md)
 
 - TV: Philips `192.168.2.21:5555`, adb at `~/Library/Android/sdk/platform-tools/adb`. Android 12, armeabi-v7a, **not rooted**.
-- Account `tan` = `20000010487262`. This TV's `deviceId` = `131837EB582CC64E8510763B027C5976E795F9F88096036DD5B1D2D1644A46C8` (serial-based SHA-256).
+- Account `tan` and this TV's `deviceId` (serial-based SHA-256) are redacted here; both live in the git-ignored `android/gradle.properties` (see `gradle.properties.example`).
 - Auth = **deviceId only** on `POST /USER/SESSIONS`. AVS host discovered via EAR. Base path `/000002/1.5/A/nld/androidtv/kpn/`. Headers: cookies (`sessionId`,`up`,`avs6_cookie`) + `x-xsrf-token` + `avssite: http://www.itvonline.nl`.
 - Play: `GET /CONTENT/VIDEOURL/LIVE/{channelId}/{assetId}?deviceId=..&profile=G09&time={nowMs}` → DASH `.mpd` + Widevine `licenseAcquisitionURL`.
 
@@ -106,10 +116,10 @@ Native **Android, Kotlin, Media3/ExoPlayer**, leanback. Target < 10 MB, low memo
 3. **Player**: `ExoPlayer` + `DashMediaSource` + `DefaultDrmSessionManager` (Widevine, `licenseUri` from VIDEOURL). Up/down = channel zap.
 4. v1 scope: session + grid + play + zap. EPG now/next (done in v0.2).
 
-### Open decisions for next session
-- **deviceId handling**: hardcode this TV's deviceId, or replicate the serial-based SHA-256 derivation so it works on any device? (Derivation hints in `libapp.so`: "serialBasedDeviceId", "deviceId migrated to full-length SHA-256".)
-- **EPG in v1?** (yes/no)
-- **Project location**: new Android Studio project — where (subfolder here, or separate repo)?
+### Resolved decisions
+- **deviceId handling** (session 5): the app makes its own random deviceId and registers it with a one-time sign-in, like the KPN web player does. KPN's own serial-based derivation is not reproduced and not needed. An optional gradle seed keeps an already registered pair working without a sign-in.
+- **EPG**: shipped in v0.2 (now/next), still in use.
+- **Project location**: settled as `android/` in this repo.
 
 ## How to recapture live traffic (only if a new detail is needed)
 

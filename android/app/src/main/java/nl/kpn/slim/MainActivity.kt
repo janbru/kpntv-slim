@@ -12,6 +12,9 @@ import android.text.style.ForegroundColorSpan
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
 import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.Toast
@@ -54,7 +57,8 @@ class MainActivity : Activity(), LifecycleOwner {
     private val registry = LifecycleRegistry(this)
     override val lifecycle: Lifecycle get() = registry
 
-    private val avs = AvsClient(BuildConfig.KPN_ACCOUNT, BuildConfig.KPN_DEVICE_ID)
+    /** Created once this install has an [Identity] (stored from an earlier sign-in, or the sign-in just done). */
+    private lateinit var avs: AvsClient
     private lateinit var logos: LogoLoader
     private val epg = Epg()
     private var epgJob: Job? = null
@@ -130,6 +134,13 @@ class MainActivity : Activity(), LifecycleOwner {
 
     private val prefs by lazy { getSharedPreferences("slim", MODE_PRIVATE) }
 
+    private lateinit var login: View
+    private lateinit var loginUser: EditText
+    private lateinit var loginPass: EditText
+    private lateinit var loginError: TextView
+    private lateinit var loginButton: TextView
+    private var loginBusy = false
+
     /** Start playback at the top quality instead of ramping up from the lowest (like the official app's flag). */
     private var highBandwidthStart: Boolean
         get() = prefs.getBoolean("highBandwidthStart", false)
@@ -200,7 +211,18 @@ class MainActivity : Activity(), LifecycleOwner {
         list.layoutManager = LinearLayoutManager(this)
         logos = LogoLoader(lifecycleScope)
 
-        loadChannels()
+        login = findViewById(R.id.login)
+        loginUser = findViewById(R.id.login_user)
+        loginPass = findViewById(R.id.login_pass)
+        loginError = findViewById(R.id.login_error)
+        loginButton = findViewById(R.id.login_button)
+        loginButton.setOnClickListener { submitLogin() }
+        loginPass.setOnEditorActionListener { _, action, _ ->
+            if (action == EditorInfo.IME_ACTION_DONE) { submitLogin(); true } else false
+        }
+
+        val id = IdentityStore.load(prefs)
+        if (id == null) showLogin() else { avs = AvsClient(id.account, id.deviceId); loadChannels() }
     }
 
     override fun onStart() {
@@ -265,7 +287,8 @@ class MainActivity : Activity(), LifecycleOwner {
                 if (list.isNotEmpty()) tune(start, debounce = false)
                 refreshEpg()
             }.onFailure {
-                showStatus("Could not load channels:\n${it.message}\n\nPress OK to retry")
+                if (it is AuthException) showLogin("KPN no longer accepts this TV. Sign in again.")
+                else showStatus("Could not load channels:\n${it.message}\n\nPress OK to retry")
             }
         }
     }
@@ -356,6 +379,12 @@ class MainActivity : Activity(), LifecycleOwner {
         if (event.action != KeyEvent.ACTION_DOWN) return super.dispatchKeyEvent(event)
         val code = event.keyCode
         keyRepeating = event.repeatCount > 0
+
+        // While signing in every key belongs to the form (space and letters must type, not pause or zap).
+        if (login.visibility == View.VISIBLE) {
+            if (code == KeyEvent.KEYCODE_BACK) { confirmExit(); return true }
+            return super.dispatchKeyEvent(event)
+        }
 
         when (code) {
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_SPACE -> { togglePause(); return true }
@@ -866,6 +895,50 @@ class MainActivity : Activity(), LifecycleOwner {
         if (now != null) {
             osdProgress.progress = ((at - now.startMs) * 1000 / (now.endMs - now.startMs)).toInt().coerceIn(0, 1000)
         }
+    }
+
+    // ---- sign-in ----
+
+    private fun showLogin(message: String? = null) {
+        hideStatus()
+        loginError.text = message.orEmpty()
+        loginError.visibility = if (message.isNullOrEmpty()) View.GONE else View.VISIBLE
+        login.visibility = View.VISIBLE
+        loginUser.requestFocus()
+    }
+
+    private fun submitLogin() {
+        if (loginBusy) return
+        val user = loginUser.text.toString().trim()
+        val pass = loginPass.text.toString()
+        if (user.isEmpty() || pass.isEmpty()) {
+            showLoginError("Enter your account number or e-mail address and your password")
+            return
+        }
+        (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(loginPass.windowToken, 0)
+        loginBusy = true
+        loginError.visibility = View.GONE
+        loginButton.text = "Signing in…"
+        val deviceId = IdentityStore.newDeviceId()
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { AvsClient(user, deviceId).register(pass) } }
+            loginBusy = false
+            loginButton.text = "Sign in"
+            result.onSuccess { account ->
+                IdentityStore.save(prefs, Identity(account, deviceId))
+                loginPass.setText("")
+                login.visibility = View.GONE
+                avs = AvsClient(account, deviceId)
+                loadChannels()
+            }.onFailure {
+                showLoginError("Sign in failed: ${it.message}")
+            }
+        }
+    }
+
+    private fun showLoginError(msg: String) {
+        loginError.text = msg
+        loginError.visibility = View.VISIBLE
     }
 
     private fun showStatus(msg: String) {

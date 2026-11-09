@@ -14,8 +14,10 @@ android {
         versionCode = 1
         versionName = "0.1"
 
-        buildConfigField("String", "KPN_ACCOUNT", "\"${property("kpn.account")}\"")
-        buildConfigField("String", "KPN_DEVICE_ID", "\"${property("kpn.deviceId")}\"")
+        // Optional developer seed: an account + deviceId that is already registered. Normally empty; the app then
+        // asks for a one-time sign-in and registers its own random deviceId.
+        buildConfigField("String", "KPN_ACCOUNT", "\"${findProperty("kpn.account") ?: ""}\"")
+        buildConfigField("String", "KPN_DEVICE_ID", "\"${findProperty("kpn.deviceId") ?: ""}\"")
     }
 
     buildFeatures { buildConfig = true }

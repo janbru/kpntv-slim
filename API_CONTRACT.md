@@ -6,9 +6,9 @@ Captured via WireGuard-mode mitmproxy + reFlutter SSL-bypass build on a Philips 
 ## Key fact: auth is deviceId-only
 `POST /USER/SESSIONS` takes **only a `deviceId`** (no password/OAuth/Firebase token in the body). The device is pre-registered to the account during the one-time KPN login/pairing. Once registered, sessions mint from deviceId alone. `isDevRegistered:false` in the response does not block live playback.
 
-- Account number (`tan`): `20000010487262`
-- This TV's `deviceId` (SHA-256, 64 hex): `131837EB582CC64E8510763B027C5976E795F9F88096036DD5B1D2D1644A46C8`
-- Derivation (from binary): serial-based → SHA-256 ("serialBasedDeviceId", "deviceId migrated to full-length SHA-256").
+- Account number (`tan`): `<REDACTED>` (see local `gradle.properties`, git-ignored)
+- This TV's `deviceId` (SHA-256, 64 hex): `<REDACTED>` (see local `gradle.properties`, git-ignored)
+- Derivation in the official TV app: serial-based, then SHA-256 ("serialBasedDeviceId"). Not reproduced and not needed: the web player makes up its own deviceId (SHA-256 over a random number, the username and a timestamp) and it is registered at the first password sign-in.
 
 ## Hosts
 | Host | Role |
@@ -46,6 +46,15 @@ body:
    Header: X-Xsrf-Token, Avs-Refresh-Token. Body = full user profile (resultObj.profile.profileData).
 ```
 `up` JWT payload: userId, username(=account), userOptions [NPVR_VIEW, CATCHUP, STARTOVER, OOH_LIVE, OOH_VOD]. `avs6_cookie` is the AVS session JWT (iss "AVS").
+
+### 2b. First sign-in (registers a new deviceId)
+Taken from the KPN web player (`https://tv.kpn.com/app.js`, `loginWithPassword` / `loginWithKpnId`); implemented in the app but not yet exercised with real credentials.
+```
+POST /USER/SESSIONS/    (same URL as above)
+{"credentialsStdAuth":{"username":"<account number>","password":"<password>","remember":true,
+  "deviceInfo":{ ...same fields as in section 2... }}}
+```
+The reply is the same as a deviceId-only session; `resultObj.profile.profileData.username` is the account number. For an e-mail address the EAR call becomes `POST .../public/v1/ear?type=ott` with `{"username","password"}` instead of `GET ...&tan=`. Related web endpoints: `GET/DELETE /USER/DEVICES/` (list and remove registered devices).
 
 ## 3. Live channel list
 ```

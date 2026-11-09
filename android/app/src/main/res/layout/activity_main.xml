@@ -407,6 +407,71 @@
             android:textSize="13sp" />
     </LinearLayout>
 
+    <!-- One-time sign-in, shown when this install has no registered device yet -->
+    <LinearLayout
+        android:id="@+id/login"
+        android:layout_width="560dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="12dp"
+        android:background="@drawable/osd_bg"
+        android:orientation="vertical"
+        android:padding="16dp"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Sign in to KPN TV+"
+            android:textColor="@android:color/white"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="10dp"
+            android:layout_marginTop="4dp"
+            android:text="Needed once. Your password goes to KPN only and is not stored on this TV."
+            android:textColor="#B0FFFFFF"
+            android:textSize="14sp" />
+
+        <EditText
+            android:id="@+id/login_user"
+            style="@style/LoginField"
+            android:hint="Account number or e-mail"
+            android:imeOptions="actionNext"
+            android:inputType="textEmailAddress"
+            android:nextFocusDown="@+id/login_pass" />
+
+        <EditText
+            android:id="@+id/login_pass"
+            style="@style/LoginField"
+            android:layout_marginTop="10dp"
+            android:hint="Password"
+            android:imeOptions="actionDone"
+            android:inputType="textPassword"
+            android:nextFocusDown="@+id/login_button" />
+
+        <TextView
+            android:id="@+id/login_error"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:textColor="#FFB4A8"
+            android:textSize="15sp"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/login_button"
+            style="@style/OptionRow"
+            android:layout_height="44dp"
+            android:layout_marginTop="10dp"
+            android:clickable="true"
+            android:text="Sign in"
+            android:textStyle="bold" />
+    </LinearLayout>
+
     <!-- Buffering spinner, shown by the activity only after a delay -->
     <ProgressBar
         android:id="@+id/loader"

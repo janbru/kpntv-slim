@@ -3,8 +3,9 @@ android.useAndroidX=true
 kotlin.code.style=official
 android.nonTransitiveRClass=true
 
-# KPN account + the deviceId already registered to it (serial-based SHA-256 of the Philips TV).
-# Sessions are minted from the deviceId alone, so this is the only "credential".
-kpn.account=YOUR_KPN_ACCOUNT_NUMBER
-kpn.deviceId=YOUR_REGISTERED_DEVICE_ID_SHA256
+# OPTIONAL developer seed. Leave these out and the app shows a one-time sign-in (account number or e-mail +
+# password) that registers its own random deviceId; the password is never stored.
+# Set both to skip the sign-in with an account/deviceId pair that is already registered.
+#kpn.account=YOUR_KPN_ACCOUNT_NUMBER
+#kpn.deviceId=YOUR_REGISTERED_DEVICE_ID_SHA256
 org.gradle.java.home=/path/to/jdk-21
