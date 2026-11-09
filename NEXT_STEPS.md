@@ -26,19 +26,22 @@ Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kp
 - Right or Info: show the bottom banner; press again while it shows to open the options menu.
 - Menu, Left, Guide: channel list (its first row opens Settings).
 - Play/Pause, Pause, Play media keys (and Space): pause. Red: start over. Green: programme info.
-- Back: close the open overlay; with no overlay it **exits the app**.
+- Fast forward / Rewind media keys (also skip/step keys): seek. 10 s, and quick repeats (within 1.5 s) step up 30 s, 1 min, 2 min, 5 min. Forward past the live edge lands on live.
+- Stop: back to live when paused or behind (instant seek to the live edge on a plain live stream, re-tune after start over). When already live it behaves like Back (asks to exit).
+- Back: close the open overlay; with no overlay the first press shows a "Press back again to exit" toast and a second press within 2 s exits the app.
 - The TV's system intercepts the Settings key, so it is not used.
 
 ### Features
 - **EPG now/next**: one `GET /TRAY/EPG?filter_startTime={now}&filter_endTime={now+3h}&filter_channelIds={all}&outputFormat=EXTENDED` (about 400 KB, 0.4 s) for all 108 channels. List rows show the current programme.
 - **Bottom banner** (860dp wide, rounded, floating above the bottom edge): channel number and name, live video/audio stream info, clock, programme title, time range, "Volgend: next", progress bar. Stream info is dim; any piece that changes during the same stream (adaptive quality switch) glows green and fades over 2.5 s. A new stream starts without a glow (`lastParts` is reset right before `setMediaItem`).
 - **Start from beginning**: no extra endpoint. `VIDEOURL/LIVE/{ch}/{asset}?time={programStartMs}` (exact ms, not rounded) returns a manifest that begins at that moment (URL carries `&t=<ISO>`). The window reaches back about 6 h (tested 10 min to 3 days, older is clamped). Played with `setMediaItem(item, 0)`. Only offered when the programme has `contentOptions: STARTOVER`. While not live: banner and info panel describe the programme being played (`timeshiftBase + currentPosition`), the clock shows `(-N min)`, "Go to live" appears. "Behind live" is measured against ExoPlayer's target live offset, so plain live never counts as behind.
-- **Pause**: pause icon top right. Live pause works because the dynamic manifest has a long window.
+- **Pause**: pause icon top right with the time behind live next to it (`-0:14`, updated twice a second). Live pause works because the dynamic manifest has a long window. The banner clock also shows `(-28 s)` / `(-N min)` when behind.
+- **Buffering spinner**: ExoPlayer's own one is off; a green spinner appears only after 1 s of continuous tuning/buffering (`armLoader`, `LOADER_DELAY_MS`), so quick zaps stay clean.
 - **Programme info panel**: title, season/episode, episode title, channel, time and length, genres, year, age rating, description, presenters/directors/cast.
 - **Settings** (SharedPreferences `slim`): "High bandwidth start" (default Off) gives ExoPlayer a 20 Mbps initial bandwidth estimate so playback starts at 1080p50 / 8 Mbps instead of ramping up from 768x432. Only matters on a cold start, because the shared bandwidth meter remembers its estimate afterwards. "Info banner duration" 1-15 s (default 5). Toggling the first one rebuilds the player and re-tunes.
 - The TV currently has High bandwidth start **Off** and banner **15 s** (left over from testing).
 
-- **Images** (v0.6): channel logo in the list rows and the banner header, programme artwork in the banner (320x180 thumbnail on the left) and the info panel (640x360 on the right). URL patterns come from the KPN web player bundle (`https://tv.kpn.com/app.js`, helpers `wt` and `Xr`), no app recapture needed:
+- **Images** (v0.6): channel logo in the list rows and the banner header, programme artwork in the info panel only (640x360 on the right; the banner has no thumbnail by choice). URL patterns come from the KPN web player bundle (`https://tv.kpn.com/app.js`, helpers `wt` and `Xr`), no app recapture needed:
   - Channel logo: `https://images.tv.kpn.com/logo/{externalId}/{height}.png` (`externalId` from LIVECHANNELS metadata, e.g. `dtvchannels_1`; height 100 gives 149x100; transparent PNG; all 108 channels verified).
   - Programme: `https://images.tv.kpn.com/epg/{pictureUrl}/{w}x{h}.jpg?blurred=false` (`pictureUrl` from the EPG metadata; any WxH works; `vod/` instead of `epg/` for non-programme content; `blurred=true` gives a blurred variant; `round=true` gives a round PNG).
   - Provider logos: `/misc/provider/{id}/{w}x{h}.png`. The old `logoMedium`/`size_x/...` paths in the channel assets are dead.

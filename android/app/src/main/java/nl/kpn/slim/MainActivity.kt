@@ -14,6 +14,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.ImageView
 import android.widget.ProgressBar
+import android.widget.Toast
 import android.widget.TextView
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
@@ -43,7 +44,7 @@ import kotlinx.coroutines.withContext
  * Single screen: full-screen live player, with a channel list overlay.
  *
  * Remote: Up/Down or CH+/CH- zap, digits jump to a channel number, OK/Menu/Left opens the list,
- * Back closes the list (or exits), Info shows the channel banner.
+ * Back closes the open overlay, or (pressed twice) exits. Info shows the channel banner.
  *
  * Plain Activity (not AppCompat) to keep the APK small; we provide our own LifecycleOwner
  * for coroutine scoping.
@@ -70,13 +71,14 @@ class MainActivity : Activity(), LifecycleOwner {
     private lateinit var osdNext: TextView
     private lateinit var osdProgress: ProgressBar
     private lateinit var status: TextView
-    private lateinit var paused: View // pause icon
+    private lateinit var paused: View // pause icon + time behind live
+    private lateinit var pausedBehind: TextView
+    private lateinit var loader: View
     private lateinit var options: View
     private lateinit var rowPause: TextView
     private lateinit var rowStartOver: View
     private lateinit var rowLive: View
     private lateinit var info: View
-    private lateinit var osdThumb: ImageView
     private lateinit var osdLogo: ImageView
     private lateinit var infoImage: ImageView
     private lateinit var infoTitle: TextView
@@ -102,6 +104,12 @@ class MainActivity : Activity(), LifecycleOwner {
     private var digits = ""
     private var retriedCurrent = false
     private var noticeJob: Job? = null
+    private var loaderJob: Job? = null
+    private var pausedJob: Job? = null
+    private var lastBackAt = 0L
+    private var exitToast: Toast? = null
+    private var lastSeekAt = 0L
+    private var seekStep = 0
 
     // Stream info glow: last shown pieces (key to text), the pieces currently glowing, and the running fade.
     private var streamVideo: List<Pair<String, String>> = emptyList()
@@ -145,12 +153,13 @@ class MainActivity : Activity(), LifecycleOwner {
         osdProgress = findViewById(R.id.osd_progress)
         status = findViewById(R.id.status)
         paused = findViewById(R.id.paused)
+        pausedBehind = findViewById(R.id.paused_behind)
+        loader = findViewById(R.id.loader)
         options = findViewById(R.id.options)
         rowPause = findViewById(R.id.row_pause)
         rowStartOver = findViewById(R.id.row_startover)
         rowLive = findViewById(R.id.row_live)
         info = findViewById(R.id.info)
-        osdThumb = findViewById(R.id.osd_thumb)
         osdLogo = findViewById(R.id.osd_logo)
         infoImage = findViewById(R.id.info_image)
         infoTitle = findViewById(R.id.info_title)
@@ -257,6 +266,8 @@ class MainActivity : Activity(), LifecycleOwner {
         val ch = channels[i]
         prefs.edit().putInt("lastChannelId", ch.id).apply()
         showOsd(ch)
+        hideLoader()
+        armLoader()
 
         tuneJob?.cancel()
         tuneJob = lifecycleScope.launch {
@@ -286,7 +297,7 @@ class MainActivity : Activity(), LifecycleOwner {
                 p.playWhenReady = true
                 setPausedIndicator(false)
                 p.prepare()
-            }.onFailure { showStatus("${ch.name}: ${it.message}") }
+            }.onFailure { hideLoader(); showStatus("${ch.name}: ${it.message}") }
         }
     }
 
@@ -303,6 +314,7 @@ class MainActivity : Activity(), LifecycleOwner {
                 retriedCurrent = true
                 tune(current, debounce = false)
             } else {
+                hideLoader()
                 showStatus("Playback error: ${error.errorCodeName}")
             }
         }
@@ -311,7 +323,11 @@ class MainActivity : Activity(), LifecycleOwner {
         override fun onTracksChanged(tracks: Tracks) = bindStream()
 
         override fun onPlaybackStateChanged(state: Int) {
-            if (state == Player.STATE_READY) { retriedCurrent = false; timeshiftReady = true; hideStatus() }
+            when (state) {
+                Player.STATE_READY -> { retriedCurrent = false; timeshiftReady = true; hideStatus(); hideLoader() }
+                Player.STATE_BUFFERING -> armLoader()
+                else -> Unit
+            }
         }
     }
 
@@ -325,6 +341,9 @@ class MainActivity : Activity(), LifecycleOwner {
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_SPACE -> { togglePause(); return true }
             KeyEvent.KEYCODE_MEDIA_PAUSE -> { setPaused(true); return true }
             KeyEvent.KEYCODE_MEDIA_PLAY -> { setPaused(false); return true }
+            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD, KeyEvent.KEYCODE_MEDIA_STEP_FORWARD -> { seekBy(+1); return true }
+            KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD, KeyEvent.KEYCODE_MEDIA_STEP_BACKWARD -> { seekBy(-1); return true }
+            KeyEvent.KEYCODE_MEDIA_STOP -> { stopKey(); return true }
         }
 
         if (info.visibility == View.VISIBLE) {
@@ -359,6 +378,8 @@ class MainActivity : Activity(), LifecycleOwner {
             if (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_MENU) { hideList(); return true }
             return super.dispatchKeyEvent(event)
         }
+
+        if (code == KeyEvent.KEYCODE_BACK) { confirmExit(); return true }
 
         if (code in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9) { typeDigit(code - KeyEvent.KEYCODE_0); return true }
 
@@ -412,7 +433,78 @@ class MainActivity : Activity(), LifecycleOwner {
     }
 
     private fun setPausedIndicator(on: Boolean) {
+        pausedJob?.cancel()
         paused.visibility = if (on) View.VISIBLE else View.GONE
+        if (!on) return
+        // While paused the live edge keeps moving: keep the "behind live" time current.
+        pausedJob = lifecycleScope.launch {
+            while (true) {
+                pausedBehind.text = "-" + clockLength(secondsBehindLive())
+                delay(500)
+            }
+        }
+    }
+
+    /** 75 -> "1:15", 3725 -> "1:02:05". */
+    private fun clockLength(totalSeconds: Long): String {
+        val h = totalSeconds / 3600
+        val m = totalSeconds / 60 % 60
+        val s = totalSeconds % 60
+        return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
+    }
+
+    // ---- buffering spinner: only after a short delay, so quick zaps stay clean ----
+
+    private fun armLoader() {
+        if (loaderJob?.isActive == true || loader.visibility == View.VISIBLE) return
+        loaderJob = lifecycleScope.launch { delay(LOADER_DELAY_MS); loader.visibility = View.VISIBLE }
+    }
+
+    private fun hideLoader() {
+        loaderJob?.cancel()
+        loader.visibility = View.GONE
+    }
+
+    // ---- seeking, stop, exit ----
+
+    /**
+     * Fast forward / rewind. Repeated presses within [SEEK_REPEAT_MS] step up through [SEEK_STEPS_S];
+     * going forward past the live edge lands on live.
+     */
+    private fun seekBy(dir: Int) {
+        val p = player ?: return
+        val now = System.currentTimeMillis()
+        seekStep = if (now - lastSeekAt < SEEK_REPEAT_MS) (seekStep + 1).coerceAtMost(SEEK_STEPS_S.lastIndex) else 0
+        lastSeekAt = now
+        val target = p.currentPosition + dir * SEEK_STEPS_S[seekStep] * 1000L
+        val window = Timeline.Window()
+        val liveEdge = if (p.currentTimeline.isEmpty) C.TIME_UNSET
+        else p.currentTimeline.getWindow(p.currentMediaItemIndex, window).defaultPositionMs
+        if (dir > 0 && p.isCurrentMediaItemLive && liveEdge != C.TIME_UNSET && target >= liveEdge) {
+            p.seekToDefaultPosition()
+        } else {
+            p.seekTo(target.coerceAtLeast(0L))
+        }
+        channels.getOrNull(current)?.let(::showOsd)
+    }
+
+    /** Stop: back to live when behind or paused; when already live it asks to exit, like Back. */
+    private fun stopKey() {
+        val p = player
+        val behind = secondsBehindLive() >= 3 || timeshiftBase != null || p?.playWhenReady == false
+        if (behind) goLive() else confirmExit()
+    }
+
+    /** First press shows a hint, a second one within [EXIT_WINDOW_MS] leaves the app. */
+    private fun confirmExit() {
+        val now = System.currentTimeMillis()
+        if (now - lastBackAt < EXIT_WINDOW_MS) {
+            exitToast?.cancel()
+            finish()
+            return
+        }
+        lastBackAt = now
+        exitToast = Toast.makeText(this, "Press back again to exit", Toast.LENGTH_SHORT).also { it.show() }
     }
 
     /** Seconds the viewer is behind the live edge (paused or started over); 0 when live or unknown. */
@@ -451,7 +543,15 @@ class MainActivity : Activity(), LifecycleOwner {
     }
 
     private fun goLive() {
-        if (current >= 0) tune(current, debounce = false)
+        val p = player
+        if (p != null && timeshiftBase == null && p.isCurrentMediaItemLive && p.playbackState == Player.STATE_READY) {
+            // Same stream, just jump to its live edge (no new play URL needed).
+            p.seekToDefaultPosition()
+            setPaused(false)
+            channels.getOrNull(current)?.let(::showOsd)
+        } else if (current >= 0) {
+            tune(current, debounce = false)
+        }
     }
 
     /** Short message that clears itself. */
@@ -699,9 +799,13 @@ class MainActivity : Activity(), LifecycleOwner {
         val now = ch?.let { epg.now(it.id, at) }
         val next = ch?.let { epg.next(it.id, at) }
         val behindMin = secondsBehindLive() / 60
-        osdClock.text = epg.time(System.currentTimeMillis()) + if (behindMin >= 1) "  (-$behindMin min)" else ""
+        val behindSec = secondsBehindLive()
+        osdClock.text = epg.time(System.currentTimeMillis()) + when {
+            behindMin >= 1 -> "  (-$behindMin min)"
+            behindSec >= 3 -> "  (-$behindSec s)"
+            else -> ""
+        }
         logos.load(ch?.logoUrl, osdLogo)
-        logos.load(now?.imageUrl(OSD_IMAGE_W, OSD_IMAGE_H), osdThumb)
         osdTitle.text = now?.title.orEmpty()
         osdTime.text = now?.let { "${epg.time(it.startMs)} – ${epg.time(it.endMs)}" }.orEmpty()
         osdNext.text = next?.let { "Volgend: ${it.title}" }.orEmpty()
@@ -723,9 +827,12 @@ class MainActivity : Activity(), LifecycleOwner {
     companion object {
         private const val MIN_BANNER_S = 1
         private const val MAX_BANNER_S = 15
-        // Artwork sizes in px (the image host scales to any WxH): ~2x the dp size of the views.
-        private const val OSD_IMAGE_W = 320
-        private const val OSD_IMAGE_H = 180
+        private const val LOADER_DELAY_MS = 1000L
+        private const val EXIT_WINDOW_MS = 2000L
+        private const val SEEK_REPEAT_MS = 1500L
+        /** Seek step in seconds; each quick repeat of the key moves one step up the ladder. */
+        private val SEEK_STEPS_S = longArrayOf(10, 30, 60, 120, 300)
+        // Artwork size in px (the image host scales to any WxH): ~2x the dp size of the view.
         private const val INFO_IMAGE_W = 640
         private const val INFO_IMAGE_H = 360
         private const val HIGH_START_BPS = 20_000_000L

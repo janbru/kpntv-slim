@@ -11,7 +11,7 @@
         android:layout_height="match_parent"
         android:focusable="false"
         app:use_controller="false"
-        app:show_buffering="when_playing"
+        app:show_buffering="never"
         app:surface_type="surface_view" />
 
     <!-- Bottom info banner shown after zapping / Info -->
@@ -22,25 +22,10 @@
         android:layout_gravity="bottom|center_horizontal"
         android:layout_marginBottom="40dp"
         android:background="@drawable/osd_bg"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
+        android:orientation="vertical"
         android:paddingHorizontal="20dp"
         android:paddingVertical="12dp"
         android:visibility="gone">
-
-        <ImageView
-            android:id="@+id/osd_thumb"
-            android:layout_width="144dp"
-            android:layout_height="81dp"
-            android:layout_marginEnd="16dp"
-            android:scaleType="centerCrop"
-            android:visibility="gone" />
-
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical">
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -138,7 +123,6 @@
             android:layout_marginTop="4dp"
             android:max="1000"
             android:progressDrawable="@drawable/osd_progress" />
-        </LinearLayout>
     </LinearLayout>
 
     <!-- Channel list overlay (OK / Menu to open) -->
@@ -151,18 +135,34 @@
         android:paddingVertical="24dp"
         android:visibility="gone" />
 
-    <!-- Paused indicator -->
-    <ImageView
+    <!-- Paused indicator with how far behind live we are -->
+    <LinearLayout
         android:id="@+id/paused"
-        android:layout_width="72dp"
+        android:layout_width="wrap_content"
         android:layout_height="72dp"
         android:layout_gravity="top|end"
         android:layout_margin="40dp"
         android:background="@drawable/osd_bg"
-        android:contentDescription="Paused"
-        android:padding="12dp"
-        android:src="@drawable/ic_pause"
-        android:visibility="gone" />
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="12dp"
+        android:visibility="gone">
+
+        <ImageView
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:contentDescription="Paused"
+            android:src="@drawable/ic_pause" />
+
+        <TextView
+            android:id="@+id/paused_behind"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:layout_marginEnd="8dp"
+            android:textColor="@android:color/white"
+            android:textSize="22sp" />
+    </LinearLayout>
 
     <!-- Options menu (Right / Info while the banner is showing) -->
     <LinearLayout
@@ -364,11 +364,22 @@
             android:textSize="13sp" />
     </LinearLayout>
 
+    <!-- Buffering spinner, shown by the activity only after a delay -->
+    <ProgressBar
+        android:id="@+id/loader"
+        style="?android:attr/progressBarStyleLarge"
+        android:layout_width="72dp"
+        android:layout_height="72dp"
+        android:layout_gravity="center"
+        android:indeterminateTint="@color/kpn_green"
+        android:visibility="gone" />
+
     <TextView
         android:id="@+id/status"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="center"
+        android:layout_marginTop="160dp"
         android:background="@color/panel"
         android:gravity="center"
         android:padding="16dp"
