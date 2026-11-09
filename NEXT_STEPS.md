@@ -30,6 +30,11 @@ Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kp
 - To exercise it: comment out `kpn.account` / `kpn.deviceId` in `gradle.properties`, rebuild, and either install over an app without stored identity or run `adb shell pm clear nl.kpn.slim`.
 - No sign-out yet. To switch account, clear the app data.
 
+### Artwork (session 5)
+- Source of truth is `android/art/make_art.py` (needs `rsvg-convert` and the Inter font). Run `python3 art/make_art.py` from `android/`: it rewrites the adaptive icon vectors (`drawable/ic_foreground.xml`, `ic_background.xml`, `mipmap-anydpi-v26/ic_launcher*.xml`), the PNG fallbacks (`mipmap-*/ic_launcher*.png`), the round hint icon (`drawable-xhdpi/hint_icon.png`), the TV banner (`drawable-xhdpi/banner.png`, 640x360 = 320x180 dp) and `art/preview.png`. Edit the constants at the top (colours, mark geometry) instead of the generated files.
+- Look: rounded play triangle plus two broadcast arcs in KPN green on a deep green glow; banner adds a faint ring motif and the "KPN Slim / LIVE TV" wordmark.
+- **The "Press back again to exit" message is no longer a system toast.** On this TV the system toast showed the stock Android robot instead of the app icon. Cause (from logcat): SystemUI looks for the APK in the install folder of an earlier install (`/data/app/~~…/nl.kpn.slim-…/base.apk` no longer exists after each `adb install -r`), cannot open it and falls back to the default icon. It is not an icon-format problem (adaptive plus PNG fallbacks made no difference) and probably clears on a TV reboot (not tried). All hints (`hint()`) are now a pill drawn by the app with its own round icon, so they look the same regardless of SystemUI.
+
 ### Remote control
 - Up/Down or CH+/CH-: zap. Digits: channel number. Last channel: previous channel.
 - **OK: options menu** (Pause/Play, Start from beginning, Go to live when behind, Programme info, Channel list, Settings).

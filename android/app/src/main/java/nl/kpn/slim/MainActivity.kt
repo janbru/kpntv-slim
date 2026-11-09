@@ -17,7 +17,6 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.ProgressBar
-import android.widget.Toast
 import android.widget.TextView
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
@@ -118,7 +117,9 @@ class MainActivity : Activity(), LifecycleOwner {
     private var guardKey: String? = null
     private var guardAt = 0L
     private var keyRepeating = false
-    private var exitToast: Toast? = null
+    private lateinit var hintView: View
+    private lateinit var hintText: TextView
+    private var hintJob: Job? = null
     private var lastSeekAt = 0L
     private var seekStep = 0
 
@@ -211,6 +212,8 @@ class MainActivity : Activity(), LifecycleOwner {
         list.layoutManager = LinearLayoutManager(this)
         logos = LogoLoader(lifecycleScope)
 
+        hintView = findViewById(R.id.hint)
+        hintText = findViewById(R.id.hint_text)
         login = findViewById(R.id.login)
         loginUser = findViewById(R.id.login_user)
         loginPass = findViewById(R.id.login_pass)
@@ -569,7 +572,7 @@ class MainActivity : Activity(), LifecycleOwner {
         }
         guardKey = key
         guardAt = now
-        hint(msg)
+        hint(msg, GUARD_MS)
         return false
     }
 
@@ -585,10 +588,17 @@ class MainActivity : Activity(), LifecycleOwner {
         hint("Press back again to exit")
     }
 
-    /** One short toast at a time; null just dismisses the current one. */
-    private fun hint(msg: String?) {
-        exitToast?.cancel()
-        exitToast = msg?.let { Toast.makeText(this, it, Toast.LENGTH_SHORT).also { t -> t.show() } }
+    /**
+     * One short message at a time, in a small pill with the app icon; null just dismisses it.
+     * Drawn by the app itself: the system toast takes its icon from SystemUI, which on some TVs keeps showing
+     * the default Android icon after the app was reinstalled.
+     */
+    private fun hint(msg: String?, ms: Long = EXIT_WINDOW_MS) {
+        hintJob?.cancel()
+        if (msg == null) { hintView.visibility = View.GONE; return }
+        hintText.text = msg
+        hintView.visibility = View.VISIBLE
+        hintJob = lifecycleScope.launch { delay(ms); hintView.visibility = View.GONE }
     }
 
     /** Seconds the viewer is behind the live edge (paused or started over); 0 when live or unknown. */
