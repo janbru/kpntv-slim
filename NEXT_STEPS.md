@@ -1,6 +1,6 @@
 # KPN TV+ slim: project state & next steps
 
-Last updated: 2026-11-09 (session 6). Read this first when resuming.
+Last updated: 2026-11-09 (session 7). Read this first when resuming.
 
 ## Status: native app works on the TV (v0.9)
 
@@ -45,8 +45,8 @@ Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kp
 - Right or Info: show the bottom banner; press again while it shows to open the options menu.
 - Menu, Left: channel list (its first row, with the app icon, opens Settings). **Guide: TV guide** (also "TV guide" in the options menu).
 - **TV guide keys**: Left/Right previous/next programme, Up/Down other channel (same time), CH+/CH- (or page keys) a page of channels, fast forward / rewind 3 h, Red back to now, OK watch (on now: tune live; finished: start-over or catch-up; not aired: info), Info/Green details, Back/Menu/Guide close. Play/pause/stop keep working.
-- Play/Pause, Pause, Play media keys (and Space): pause. Red: start over (also inside the info panel). Green: programme info.
-- Fast forward / Rewind media keys (also skip/step keys): seek (in the TV guide they page through time instead). 10 s, and quick repeats (within 1.5 s) step up 30 s, 1 min, 2 min, 5 min. Forward past the live edge lands on live.
+- Play/Pause, Pause, Play media keys (and Space): pause. Red: start over (also inside the info panel). Green: programme info. **Yellow: audio and subtitles** (Left/Right/OK change the selected row, Back/Menu/Yellow close). The choice is remembered by language, codec, channels and role (`trackKey`, prefs `audioKey`, `subtitleKey`) and put back after every zap (`applySavedTracks`). Not available while the TV guide is open.
+- Fast forward / Rewind media keys (also skip/step keys): seek (in the TV guide they page through time instead). 10 s, and quick repeats (within 1.5 s) step up 30 s, 1 min, 2 min, 5 min. Forward past the live edge lands on live. A hint pill shows what was skipped, summed over a quick run of presses ("▶▶  +40 s", "◀◀  -1 min 40 s", or "▶▶  Live"); a rewind stops at the start of the stream's window and then counts only what was really skipped.
 - Stop: back to live (instant seek to the live edge on a plain live stream, re-tune after start over). When already live it only says "You are watching live TV".
 - **Leave-guard**: while not live (paused, behind live, or started over: `nonLive()`), every action that leaves the current stream needs the same key/action twice within 2.5 s, otherwise it only shows a hint ("Not live. Press again to change channel"). Implemented once in `guard(key, msg, action)`. Guarded: channel up/down and CH+/-, last channel, typed channel number (type it again), picking a channel in the list, start from beginning (red, options row, info button), Go to live (Stop, options row), the High bandwidth setting (restarts the stream). Key auto-repeat never confirms. While live nothing is guarded. Not guarded on purpose: fast forward and rewind (they stay in the same stream; forward past the live edge just lands on live), pause/play, and the initial tune on app start. Exit via Back is always a double press.
 - Back: close the open overlay; with no overlay the first press shows a "Press back again to exit" hint (pill with the app icon, 2 s) and a second press within 2 s exits the app. While the sign-in panel is up, every key belongs to the form except Back, which keeps the double press to exit.
@@ -89,11 +89,10 @@ Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kp
 - Press keys one at a time and screenshot; the banner hides itself after the configured duration.
 
 ### Known gaps / next ideas
-- Audio and subtitle track picker (manifest has a second Dutch audio track and a Dutch subtitle stream; ExoPlayer picks defaults).
 - TV guide ideas: channel logos in the grid (the logos setting is ignored there), jump to a channel by number, jump to a day, a search, reminders. Programme artwork in the list rows.
 - Recordings/CPVR, out-of-home, trick-play thumbnails while scrubbing (no seeking UI yet).
 - Sign-in works (see Sign-in). Missing: a sign-out / switch account entry in Settings, a device limit check or cleanup via `USER/DEVICES`, and handling an `AuthException` that happens mid-session (it only shows the player error; restarting the app brings up the sign-in).
-- Long pause: if the manifest token expires the player errors once and the app re-tunes live (not resumed at the paused position).
+- Long pause resume (session 7) is built but not verified on the TV, because the token expiry could not be provoked: on a player error the retry now re-tunes as a start-over stream at `playedAt()` (live paused or started over) or at `currentPosition` (catch-up), and stays paused if it was paused (`tune(resumePos, startPaused)`).
 
 ## (Earlier) RE status: COMPLETE and validated.
 

@@ -14,6 +14,7 @@ import android.view.View
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
+import java.util.Locale
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.ProgressBar
@@ -28,6 +29,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Timeline
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
@@ -99,6 +101,11 @@ class MainActivity : Activity(), LifecycleOwner {
     private lateinit var valueLogos: TextView
     private lateinit var valueHighBw: TextView
     private lateinit var valueBanner: TextView
+    private lateinit var tracksPanel: View
+    private lateinit var rowAudio: View
+    private lateinit var rowSubs: View
+    private lateinit var valueAudio: TextView
+    private lateinit var valueSubs: TextView
 
     private var player: ExoPlayer? = null
     private var channels: List<Channel> = emptyList()
@@ -123,6 +130,10 @@ class MainActivity : Activity(), LifecycleOwner {
     private var hintJob: Job? = null
     private var lastSeekAt = 0L
     private var seekStep = 0
+    private var seekTotalMs = 0L
+
+    /** One selectable audio or subtitle track; [group] is null for "Off". */
+    private class TrackOption(val label: String, val key: String, val group: Tracks.Group?, val index: Int, val selected: Boolean)
 
     // Stream info glow: last shown pieces (key to text), the pieces currently glowing, and the running fade.
     private var streamVideo: List<Pair<String, String>> = emptyList()
@@ -225,6 +236,13 @@ class MainActivity : Activity(), LifecycleOwner {
         valueBanner = findViewById(R.id.value_banner)
         rowHighBw.setOnClickListener { adjustSetting(rowHighBw, 1) }
         rowBanner.setOnClickListener { adjustSetting(rowBanner, 1) }
+        tracksPanel = findViewById(R.id.tracks)
+        rowAudio = findViewById(R.id.row_audio)
+        rowSubs = findViewById(R.id.row_subs)
+        valueAudio = findViewById(R.id.value_audio)
+        valueSubs = findViewById(R.id.value_subs)
+        rowAudio.setOnClickListener { adjustTrack(rowAudio, 1) }
+        rowSubs.setOnClickListener { adjustTrack(rowSubs, 1) }
         list.layoutManager = LinearLayoutManager(this)
         logos = LogoLoader(lifecycleScope)
 
@@ -408,7 +426,11 @@ class MainActivity : Activity(), LifecycleOwner {
         }
 
         override fun onVideoSizeChanged(videoSize: VideoSize) = bindStream()
-        override fun onTracksChanged(tracks: Tracks) = bindStream()
+        override fun onTracksChanged(tracks: Tracks) {
+            bindStream()
+            applySavedTracks()
+            if (tracksPanel.visibility == View.VISIBLE) renderTracks()
+        }
 
         override fun onPlaybackStateChanged(state: Int) {
             when (state) {
@@ -465,6 +487,16 @@ class MainActivity : Activity(), LifecycleOwner {
             return true
         }
 
+        if (tracksPanel.visibility == View.VISIBLE) {
+            when (code) {
+                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_PROG_YELLOW -> hideTracks()
+                KeyEvent.KEYCODE_DPAD_LEFT -> currentFocus?.let { adjustTrack(it, -1) }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> currentFocus?.let { adjustTrack(it, 1) }
+                else -> return super.dispatchKeyEvent(event)
+            }
+            return true
+        }
+
         if (settings.visibility == View.VISIBLE) {
             when (code) {
                 KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_SETTINGS -> hideSettings()
@@ -510,6 +542,7 @@ class MainActivity : Activity(), LifecycleOwner {
             }
             KeyEvent.KEYCODE_PROG_RED -> startOver()
             KeyEvent.KEYCODE_PROG_GREEN -> showInfo()
+            KeyEvent.KEYCODE_PROG_YELLOW -> showTracks()
             else -> return super.dispatchKeyEvent(event)
         }
         return true
@@ -586,18 +619,41 @@ class MainActivity : Activity(), LifecycleOwner {
     private fun seekBy(dir: Int) {
         val p = player ?: return
         val now = System.currentTimeMillis()
-        seekStep = if (now - lastSeekAt < SEEK_REPEAT_MS) (seekStep + 1).coerceAtMost(SEEK_STEPS_S.lastIndex) else 0
+        val burst = now - lastSeekAt < SEEK_REPEAT_MS
+        seekStep = if (burst) (seekStep + 1).coerceAtMost(SEEK_STEPS_S.lastIndex) else 0
+        if (!burst) seekTotalMs = 0L
         lastSeekAt = now
-        val target = p.currentPosition + dir * SEEK_STEPS_S[seekStep] * 1000L
+        val before = p.currentPosition
+        val target = before + dir * SEEK_STEPS_S[seekStep] * 1000L
         val window = Timeline.Window()
         val liveEdge = if (p.currentTimeline.isEmpty) C.TIME_UNSET
         else p.currentTimeline.getWindow(p.currentMediaItemIndex, window).defaultPositionMs
         if (dir > 0 && p.isCurrentMediaItemLive && liveEdge != C.TIME_UNSET && target >= liveEdge) {
             p.seekToDefaultPosition()
+            seekTotalMs = 0L
+            hint("▶▶  Live", SEEK_HINT_MS)
         } else {
-            p.seekTo(target.coerceAtLeast(0L))
+            val to = target.coerceAtLeast(0L)
+            p.seekTo(to)
+            // What was actually skipped, summed over a quick run of presses (a rewind stops at the start).
+            seekTotalMs += to - before
+            hint(skipText(seekTotalMs), SEEK_HINT_MS)
         }
         channels.getOrNull(current)?.let(::showOsd)
+    }
+
+    /** 70 s forward -> "▶▶  +1 min 10 s", 30 s back -> "◀◀  -30 s". */
+    private fun skipText(ms: Long): String {
+        val s = Math.abs(ms) / 1000
+        val h = s / 3600
+        val m = s / 60 % 60
+        val sec = s % 60
+        val amount = when {
+            h > 0 -> if (m > 0) "$h h $m min" else "$h h"
+            m > 0 -> if (sec > 0) "$m min $sec s" else "$m min"
+            else -> "$sec s"
+        }
+        return if (ms >= 0) "▶▶  +$amount" else "◀◀  -$amount"
     }
 
     /** Stop: back to live. Guarded like every way out of non-live playback; when already live it only says so. */
@@ -1078,6 +1134,125 @@ class MainActivity : Activity(), LifecycleOwner {
         }
     }
 
+    // ---- audio and subtitles (yellow key) ----
+
+    private fun showTracks() {
+        osd.visibility = View.GONE
+        renderTracks()
+        tracksPanel.visibility = View.VISIBLE
+        rowAudio.requestFocus()
+    }
+
+    private fun hideTracks() {
+        tracksPanel.visibility = View.GONE
+    }
+
+    private fun audioOptions(): List<TrackOption> {
+        val groups = player?.currentTracks?.groups?.filter { it.type == C.TRACK_TYPE_AUDIO && it.isSupported } ?: return emptyList()
+        val raw = groups.flatMap { g -> (0 until g.length).filter { g.isTrackSupported(it) }.map { g to it } }
+        val labels = raw.map { (g, i) -> audioLabel(g.getTrackFormat(i)) }
+        return raw.mapIndexed { n, (g, i) ->
+            // Two tracks that read the same get their bitrate or a number so they can be told apart.
+            val label = if (labels.count { it == labels[n] } > 1) {
+                val kbps = g.getTrackFormat(i).bitrate.takeIf { it > 0 }?.let { " · ${it / 1000} kbps" } ?: " (${n + 1})"
+                labels[n] + kbps
+            } else labels[n]
+            TrackOption(label, trackKey(g.getTrackFormat(i)), g, i, g.isTrackSelected(i))
+        }
+    }
+
+    private fun subtitleOptions(): List<TrackOption> {
+        val groups = player?.currentTracks?.groups?.filter { it.type == C.TRACK_TYPE_TEXT && it.isSupported } ?: return emptyList()
+        val raw = groups.flatMap { g -> (0 until g.length).filter { g.isTrackSupported(it) }.map { g to it } }
+        if (raw.isEmpty()) return emptyList()
+        val labels = raw.map { (g, i) -> subtitleLabel(g.getTrackFormat(i)) }
+        val tracks = raw.mapIndexed { n, (g, i) ->
+            val label = if (labels.count { it == labels[n] } > 1) labels[n] + " (${n + 1})" else labels[n]
+            TrackOption(label, trackKey(g.getTrackFormat(i)), g, i, g.isTrackSelected(i))
+        }
+        return listOf(TrackOption("Off", "off", null, 0, tracks.none { it.selected })) + tracks
+    }
+
+    /** What makes a track "the same" on another channel: language, codec, channels, role; not the label text. */
+    private fun trackKey(f: Format) = "${f.language}|${f.sampleMimeType}|${f.channelCount}|${f.roleFlags}"
+
+    private fun languageName(f: Format): String {
+        // The manifest label is often a bare code ("Ned"), so the language name comes first.
+        val tag = f.language?.takeIf { it != C.LANGUAGE_UNDETERMINED }
+            ?: return f.label?.takeIf { it.isNotBlank() } ?: "Unknown language"
+        return Locale.forLanguageTag(tag).getDisplayLanguage(Locale.ENGLISH).ifBlank { f.label ?: tag }
+            .replaceFirstChar { it.uppercase() }
+    }
+
+    private fun audioLabel(f: Format): String {
+        val codec = when (f.sampleMimeType) {
+            MimeTypes.AUDIO_AC3 -> "AC-3"
+            MimeTypes.AUDIO_E_AC3, MimeTypes.AUDIO_E_AC3_JOC -> "E-AC-3"
+            MimeTypes.AUDIO_AAC -> "AAC"
+            MimeTypes.AUDIO_AC4 -> "AC-4"
+            else -> f.sampleMimeType?.substringAfter('/')?.uppercase()
+        }
+        val channels = when (f.channelCount) {
+            Format.NO_VALUE -> null
+            1 -> "mono"
+            2 -> "stereo"
+            6 -> "5.1"
+            8 -> "7.1"
+            else -> "${f.channelCount} ch"
+        }
+        val description = if (f.roleFlags and C.ROLE_FLAG_DESCRIBES_VIDEO != 0) "audio description" else null
+        return listOfNotNull(languageName(f), listOfNotNull(codec, channels).joinToString(" ").ifEmpty { null }, description).joinToString(" · ")
+    }
+
+    private fun subtitleLabel(f: Format): String {
+        val hearing = if (f.roleFlags and C.ROLE_FLAG_CAPTION != 0) "hearing impaired" else null
+        return listOfNotNull(languageName(f), hearing).joinToString(" · ")
+    }
+
+    /** What the row shows: the selected option, with arrows when there is something to switch to. */
+    private fun trackValue(options: List<TrackOption>, none: String): String {
+        if (options.isEmpty()) return none
+        val sel = options.firstOrNull { it.selected } ?: options.first()
+        return if (options.size > 1) "◀ ${sel.label} ▶" else sel.label
+    }
+
+    private fun renderTracks() {
+        valueAudio.text = trackValue(audioOptions(), "No audio tracks")
+        valueSubs.text = trackValue(subtitleOptions(), "None available")
+    }
+
+    /** [dir] is -1 (Left) or +1 (Right / OK); the choice wraps around and is remembered for other channels. */
+    private fun adjustTrack(row: View, dir: Int) {
+        val audio = row.id == R.id.row_audio
+        val options = if (audio) audioOptions() else subtitleOptions()
+        if (options.size < 2) return
+        val at = options.indexOfFirst { it.selected }.coerceAtLeast(0)
+        val next = options[Math.floorMod(at + dir, options.size)]
+        selectTrack(next, audio)
+        prefs.edit().putString(if (audio) "audioKey" else "subtitleKey", next.key).apply()
+        // The player reports the new selection through onTracksChanged; show it right away as well.
+        valueSubs.takeIf { !audio }?.text = "◀ ${next.label} ▶"
+        valueAudio.takeIf { audio }?.text = "◀ ${next.label} ▶"
+    }
+
+    private fun selectTrack(option: TrackOption, audio: Boolean) {
+        val p = player ?: return
+        val type = if (audio) C.TRACK_TYPE_AUDIO else C.TRACK_TYPE_TEXT
+        val b = p.trackSelectionParameters.buildUpon().clearOverridesOfType(type)
+        if (option.group == null) b.setTrackTypeDisabled(type, true)
+        else b.setTrackTypeDisabled(type, false).setOverrideForType(TrackSelectionOverride(option.group.mediaTrackGroup, listOf(option.index)))
+        p.trackSelectionParameters = b.build()
+    }
+
+    /** A new stream starts with the player's defaults: put the viewer's earlier audio and subtitle choice back. */
+    private fun applySavedTracks() {
+        listOf(true to audioOptions(), false to subtitleOptions()).forEach { (audio, options) ->
+            val saved = prefs.getString(if (audio) "audioKey" else "subtitleKey", null) ?: return@forEach
+            val want = options.firstOrNull { it.key == saved } ?: return@forEach
+            if (!want.selected) selectTrack(want, audio)
+        }
+    }
+
     // ---- sign-in ----
 
     private fun showLogin(message: String? = null) {
@@ -1152,6 +1327,7 @@ class MainActivity : Activity(), LifecycleOwner {
         private const val GUARD_MS = 2500L
         private const val STREAM_FADE_MS = 700L
         private const val SEEK_REPEAT_MS = 1500L
+        private const val SEEK_HINT_MS = 1800L
         /** Seek step in seconds; each quick repeat of the key moves one step up the ladder. */
         private val SEEK_STEPS_S = longArrayOf(10, 30, 60, 120, 300)
         // Artwork size in px (the image host scales to any WxH): ~2x the dp size of the view.
