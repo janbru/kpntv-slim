@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Program progress: solid green up to the playback position, dim green up to
+     the live point ("now") while watching a still-running program behind live. -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:id="@android:id/background">
         <shape android:shape="rectangle">
@@ -6,10 +8,18 @@
             <corners android:radius="3dp" />
         </shape>
     </item>
+    <item android:id="@android:id/secondaryProgress">
+        <clip>
+            <shape android:shape="rectangle">
+                <solid android:color="@color/progress_live" />
+                <corners android:radius="3dp" />
+            </shape>
+        </clip>
+    </item>
     <item android:id="@android:id/progress">
         <clip>
             <shape android:shape="rectangle">
-                <solid android:color="@color/progress" />
+                <solid android:color="@color/kpn_green" />
                 <corners android:radius="3dp" />
             </shape>
         </clip>

@@ -1247,7 +1247,12 @@ class MainActivity : Activity(), LifecycleOwner {
         osdNext.text = next?.let { "Volgend: ${it.title}" }.orEmpty()
         osdProgress.visibility = if (now == null) View.INVISIBLE else View.VISIBLE
         if (now != null) {
-            osdProgress.progress = ((at - now.startMs) * 1000 / (now.endMs - now.startMs)).toInt().coerceIn(0, 1000)
+            val span = now.endMs - now.startMs
+            osdProgress.progress = ((at - now.startMs) * 1000 / span).toInt().coerceIn(0, 1000)
+            // The live point, shown only while this program is still on air.
+            val wall = System.currentTimeMillis()
+            osdProgress.secondaryProgress =
+                if (wall < now.endMs) ((wall - now.startMs) * 1000 / span).toInt().coerceIn(0, 1000) else 0
         }
     }
 

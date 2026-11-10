@@ -3,7 +3,7 @@
     <color name="panel">#E6101010</color>
     <color name="item_focused">#FF00C300</color>
     <color name="item_playing">#33FFFFFF</color>
-    <color name="progress">#F5C842</color>
+    <color name="progress_live">#8000C300</color>
     <color name="stream_dim">#80FFFFFF</color>
     <color name="stream_glow">#4ADE5A</color>
     <color name="field">#26FFFFFF</color>
