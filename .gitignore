@@ -1,10 +1,10 @@
-# Large / third-party artifacts (regenerable, see NEXT_STEPS.md)
+# Large / third-party artifacts: local only, never commit
 *.apkm
 jadx-out/
 libs/
 tools/*.jar
 
-# Live captures: contain session tokens, WireGuard keys, account data
+# Local research data: contains account data, never commit
 capture/
 
 # Personal

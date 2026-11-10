@@ -1,14 +1,14 @@
-# KPN TV+ — Live TV API contract (reverse-engineered, validated 2026-11-09)
+# KPN TV+: live TV API contract (as used by this app, validated 2026-11-09)
 
-App: `com.kpn.kpnandroidtv` v09.06.00 (Flutter, Dart pkg `pca_app`). Backend = Nagra/MediaKind **AVS** (Agile Video Service), API version "avs67".
-Captured via WireGuard-mode mitmproxy + reFlutter SSL-bypass build on a Philips Android TV. **Whole chain re-validated from a plain HTTP client (curl on macOS)** — no app/device needed beyond a registered `deviceId`.
+Backend = Nagra/MediaKind **AVS** (Agile Video Service), API version "avs67". Much of this matches the public KPN web player (`https://tv.kpn.com/app.js`).
+The whole chain was validated from a plain HTTP client (curl on macOS) and from this app on a Philips Android TV. It needs a valid KPN TV+ subscription: every call runs in the subscriber's own session.
 
 ## Key fact: auth is deviceId-only once the device is registered
 `POST /USER/SESSIONS` takes **only a `deviceId`** (no password/OAuth/Firebase token in the body) for a registered device. A device gets registered by its first sign-in with abonnementsnummer + pincode (section 2b), or by the official app's own pairing. Once registered, sessions mint from deviceId alone. `isDevRegistered:false` in the response does not block live playback.
 
 - Account number (`tan`): not written here; the app keeps it in its private preferences (optional seed: git-ignored `gradle.properties`)
 - `deviceId` (SHA-256 style, 64 hex): not written here; made by the app at the first sign-in
-- Derivation in the official TV app: serial-based, then SHA-256 ("serialBasedDeviceId"). Not reproduced and not needed: the web player makes up its own deviceId (SHA-256 over a random number, the username and a timestamp) and it is registered at the first sign-in.
+- The web player makes up its own deviceId (SHA-256 over a random number, the username and a timestamp) and it is registered at the first sign-in. This app does the same with a random one.
 
 ## Hosts
 | Host | Role |
@@ -96,7 +96,7 @@ GET /CONTENT/VIDEOURL/PROGRAM/{programId}/{CUTV assetId}?deviceId=..&profile=G09
 - MPEG-DASH manifest (`.mpd`) from kpnstreaming.nl CDN; URL self-authorizes via `?token=`.
 - Widevine license: ExoPlayer/Media3 `MediaItem.DrmConfiguration(Widevine, licenseUri=licenseAcquisitionURL)`. License request is a standard Widevine POST (handled natively by MediaDrm). No extra header needed beyond the URL observed (license URL embeds its own auth path segments).
 
-## Other useful endpoints (captured)
+## Other useful endpoints
 - `GET /USER/PROFILE/`
 - `GET /TRAY/EPG?filter_startTime={ms}&filter_endTime={ms}&filter_channelIds={csv}&extendedChannelMetadata=true&outputFormat=EXTENDED` (any range, past included; returns every programme overlapping it, so one that straddles the start is included; 12 channels x 3 h is about 59 KB)
 - `GET /TRAY/SEARCH/PROGRAM?...filter_airingTime=now&filter_channelIds={csv}&outputFormat=EXTENDED` (now/next)
