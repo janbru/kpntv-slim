@@ -1248,7 +1248,8 @@ class MainActivity : Activity(), LifecycleOwner {
         osdProgress.visibility = if (now == null) View.INVISIBLE else View.VISIBLE
         if (now != null) {
             val span = now.endMs - now.startMs
-            osdProgress.progress = ((at - now.startMs) * 1000 / span).toInt().coerceIn(0, 1000)
+            // Never quite empty: right after a restart a sliver of green still marks where the viewer is.
+            osdProgress.progress = ((at - now.startMs) * 1000 / span).toInt().coerceIn(MIN_PROGRESS, 1000)
             // The live point, shown only while this program is still on air.
             val wall = System.currentTimeMillis()
             osdProgress.secondaryProgress =
@@ -1513,6 +1514,7 @@ class MainActivity : Activity(), LifecycleOwner {
 
     companion object {
         private const val MIN_BANNER_S = 1
+        private const val MIN_PROGRESS = 6 // of 1000
         private const val MAX_BANNER_S = 15
         private const val LOADER_DELAY_MS = 1500L
         private const val EXIT_WINDOW_MS = 2000L
