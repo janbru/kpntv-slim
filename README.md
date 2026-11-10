@@ -123,6 +123,8 @@ Open them from the first row of the channel list or from the options menu.
 
 KPN Slim is unofficial and unaffiliated. "KPN" and "KPN TV+" are trademarks of their owner, and I use them only to say which service the app works with. Use of the service is governed by KPN's own terms and conditions, and it is your responsibility to make sure your use of this app fits them. The app does not bypass DRM or any access control: it signs in with your own subscription and plays your own channels. It comes **as is, without warranty**, and the programme images in the screenshots belong to their broadcasters.
 
+The code is released under the [MIT License](LICENSE). That covers this project's own code only: the libraries it uses keep their own licenses, and the license grants no rights to KPN's name, logos or service.
+
 ---
 
 ## For developers
