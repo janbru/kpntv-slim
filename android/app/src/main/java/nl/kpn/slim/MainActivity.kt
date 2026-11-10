@@ -208,6 +208,9 @@ class MainActivity : Activity(), LifecycleOwner {
         setContentView(R.layout.activity_main)
 
         playerView = findViewById(R.id.player_view)
+        // A zap holds the last picture until the next channel has one, instead of going black in between (after
+        // which the kept decoder briefly showed its old last frame again before the new channel).
+        playerView.setKeepContentOnPlayerReset(true)
         list = findViewById(R.id.channel_list)
         guide = findViewById(R.id.guide)
         guide.listener = guideListener
