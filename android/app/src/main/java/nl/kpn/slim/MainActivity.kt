@@ -7,6 +7,7 @@ import android.animation.ValueAnimator
 import android.app.Activity
 import android.os.Bundle
 import android.os.Debug
+import android.os.SystemClock
 import android.text.Spannable
 import android.text.SpannableStringBuilder
 import android.text.style.ForegroundColorSpan
@@ -15,6 +16,7 @@ import android.view.View
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
+import java.io.File
 import java.util.Locale
 import android.widget.EditText
 import android.widget.ImageView
@@ -44,6 +46,7 @@ import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -111,6 +114,14 @@ class MainActivity : Activity(), LifecycleOwner {
     private var decoderName = "-"
     private var formatSwitches = ArrayList<Long>() // wall-clock times of quality switches in this stream
     private var firstFormatSeen = false
+
+    // Zap timing for the stats overlay, in ms after the key press (uptime [zapAt]); -1 while not reached.
+    private var zapAt = 0L
+    private var lastZapAt = 0L
+    private var zapUrlMs = -1L
+    private var zapKeysMs = -1L
+    private var zapFrameMs = -1L
+    private var zapDecoderMs = -1L // how long opening the video decoder took; -1 when the previous one was kept
     private lateinit var rowAudio: View
     private lateinit var rowSubs: View
     private lateinit var valueAudio: TextView
@@ -269,7 +280,7 @@ class MainActivity : Activity(), LifecycleOwner {
         }
 
         val id = IdentityStore.load(prefs)
-        if (id == null) showLogin() else { avs = AvsClient(id.account, id.deviceId); loadChannels() }
+        if (id == null) showLogin() else { avs = AvsClient(id.account, id.deviceId, prefs); loadChannels() }
     }
 
     override fun onStart() {
@@ -288,6 +299,8 @@ class MainActivity : Activity(), LifecycleOwner {
         bandwidthMeter = meter
         builder.setBandwidthMeter(meter)
         player = builder.build().also { p ->
+            // Keeps the video decoder open between channels (stop() would otherwise release it on every zap).
+            p.setForegroundMode(true)
             p.playWhenReady = true
             p.addListener(playerListener)
             p.addAnalyticsListener(statsListener)
@@ -323,23 +336,63 @@ class MainActivity : Activity(), LifecycleOwner {
         super.onDestroy()
     }
 
+    private val channelFile by lazy { File(filesDir, "channels.json") }
+
+    /**
+     * Starts from the channel list of the last run when there is one (the picture then only waits for the play
+     * URL), and fetches the current list a little later, out of the way of that first tune.
+     */
     private fun loadChannels() {
-        showStatus("Loading channels…")
         lifecycleScope.launch {
+            val cached = if (channels.isEmpty()) withContext(Dispatchers.IO) { ChannelStore.load(channelFile) } else emptyList()
+            if (cached.isNotEmpty()) {
+                applyChannels(cached)
+                delay(CHANNEL_REFRESH_DELAY_MS)
+            } else if (channels.isEmpty()) {
+                showStatus("Loading channels…")
+            }
             val result = withContext(Dispatchers.IO) { runCatching { avs.liveChannels() } }
             result.onSuccess { list ->
-                channels = list
-                adapter = ChannelAdapter(list, logos, epg, showLogos = { showLogos }, onSettings = { hideList(); showSettings() }) { i -> guard("ch:$i", "Not live. Press OK again to change channel") { hideList(); tune(i, debounce = false) } }
-                this@MainActivity.list.adapter = adapter
-                hideStatus()
-                val last = prefs.getInt("lastChannelId", -1)
-                val start = list.indexOfFirst { it.id == last }.takeIf { it >= 0 } ?: 0
-                if (list.isNotEmpty()) tune(start, debounce = false)
-                refreshEpg()
+                if (list == channels) { if (list.isEmpty()) hideStatus(); return@onSuccess }
+                withContext(Dispatchers.IO) { ChannelStore.save(channelFile, list) }
+                applyChannels(list)
             }.onFailure {
-                if (it is AuthException) showLogin("KPN no longer accepts this TV. Sign in again.")
-                else showStatus("Could not load channels:\n${it.message}\n\nPress OK to retry")
+                if (it is AuthException) showLogin(AUTH_REFUSED)
+                else if (channels.isEmpty()) showStatus("Could not load channels:\n${it.message}\n\nPress OK to retry")
             }
+        }
+    }
+
+    /**
+     * Puts [list] in use. The first list tunes to the last watched channel. A later one (the lineup changed since
+     * the last run) keeps what is playing when that channel is still there unchanged.
+     */
+    private fun applyChannels(list: List<Channel>) {
+        val first = channels.isEmpty()
+        val playing = channels.getOrNull(current)
+        val previousId = channels.getOrNull(previous)?.id
+        // Rows and indices are about to change under the open overlays.
+        hideGuide()
+        hideList()
+        channels = list
+        adapter = ChannelAdapter(list, logos, epg, showLogos = { showLogos }, onSettings = { hideList(); showSettings() }) { i -> guard("ch:$i", "Not live. Press OK again to change channel") { hideList(); tune(i, debounce = false) } }
+        this.list.adapter = adapter
+        if (first) {
+            hideStatus()
+            val last = prefs.getInt("lastChannelId", -1)
+            if (list.isNotEmpty()) tune(list.indexOfFirst { it.id == last }.coerceAtLeast(0), debounce = false)
+            refreshEpg()
+            return
+        }
+        previous = list.indexOfFirst { it.id == previousId }
+        val idx = list.indexOfFirst { it.id == playing?.id }
+        if (idx >= 0 && list[idx] == playing) {
+            current = idx
+            adapter?.playingIndex = idx
+            guide.playingIndex = idx
+        } else if (list.isNotEmpty()) {
+            current = -1
+            tune(idx.coerceAtLeast(0), debounce = false)
         }
     }
 
@@ -371,17 +424,28 @@ class MainActivity : Activity(), LifecycleOwner {
         hideLoader()
         armLoader()
 
+        // A single zap tunes at once. Only presses that follow each other quickly (stepping through channels, a
+        // held key) wait for the run to settle before hitting the API.
+        zapAt = SystemClock.uptimeMillis()
+        val settle = debounce && zapAt - lastZapAt < ZAP_RUN_MS
+        lastZapAt = zapAt
+        zapUrlMs = -1
+        zapKeysMs = -1
+        zapFrameMs = -1
+        zapDecoderMs = -1
+
         tuneJob?.cancel()
         tuneJob = lifecycleScope.launch {
-            if (debounce) delay(250) // let rapid zapping settle before hitting the API
+            if (settle) delay(ZAP_SETTLE_MS)
             val p = player ?: return@launch
             p.stop()
             p.playWhenReady = true
             setPausedIndicator(false)
             val stream = withContext(Dispatchers.IO) {
-                runCatching { if (catchUp != null) avs.catchUpStream(catchUp) else avs.liveStream(ch, startOverAt) }
+                runCatching { if (catchUp != null) avs.catchUpStream(catchUp) else avs.liveStream(ch, startOverAt) { isActive } }
             }
             stream.onSuccess { s ->
+                zapUrlMs = SystemClock.uptimeMillis() - zapAt
                 hideStatus()
                 val item = MediaItem.Builder()
                     .setUri(s.manifestUrl)
@@ -406,7 +470,10 @@ class MainActivity : Activity(), LifecycleOwner {
                 p.playWhenReady = !startPaused
                 setPausedIndicator(startPaused)
                 p.prepare()
-            }.onFailure { hideLoader(); showStatus("${ch.name}: ${it.message}") }
+            }.onFailure {
+                hideLoader()
+                if (it is AuthException) showLogin(AUTH_REFUSED) else showStatus("${ch.name}: ${it.message}")
+            }
         }
     }
 
@@ -414,7 +481,14 @@ class MainActivity : Activity(), LifecycleOwner {
     private val statsListener = object : AnalyticsListener {
         override fun onVideoDecoderInitialized(
             eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long,
-        ) { this@MainActivity.decoderName = decoderName }
+        ) {
+            this@MainActivity.decoderName = decoderName
+            zapDecoderMs = initializationDurationMs
+        }
+
+        override fun onDrmKeysLoaded(eventTime: AnalyticsListener.EventTime) {
+            if (zapKeysMs < 0) zapKeysMs = SystemClock.uptimeMillis() - zapAt
+        }
 
         override fun onVideoInputFormatChanged(
             eventTime: AnalyticsListener.EventTime, format: Format, decoderReuseEvaluation: DecoderReuseEvaluation?,
@@ -436,6 +510,9 @@ class MainActivity : Activity(), LifecycleOwner {
             // viewer was (a long pause) instead of at the live edge or the start of the programme.
             if (!retriedCurrent && current >= 0) {
                 retriedCurrent = true
+                // Retry with a fresh decoder, in case the kept one is what failed.
+                p.setForegroundMode(false)
+                p.setForegroundMode(true)
                 val wasPaused = !p.playWhenReady
                 val catchUp = curCatchUp
                 val behind = wasPaused || secondsBehindLive() >= 3
@@ -455,6 +532,9 @@ class MainActivity : Activity(), LifecycleOwner {
         }
 
         override fun onVideoSizeChanged(videoSize: VideoSize) = bindStream()
+        override fun onRenderedFirstFrame() {
+            if (zapFrameMs < 0) zapFrameMs = SystemClock.uptimeMillis() - zapAt
+        }
         override fun onTracksChanged(tracks: Tracks) {
             bindStream()
             applySavedTracks()
@@ -850,7 +930,14 @@ class MainActivity : Activity(), LifecycleOwner {
         if (epgJob?.isActive == true || channels.isEmpty()) return
         epgJob = lifecycleScope.launch {
             val snapshot = channels
-            val data = withContext(Dispatchers.IO) { runCatching { avs.epg(snapshot.map { it.id }) }.getOrNull() } ?: return@launch
+            // In parts, so a zap during the refresh waits for one small request instead of the whole lineup.
+            val data = withContext(Dispatchers.IO) {
+                runCatching {
+                    val all = HashMap<Int, List<Program>>()
+                    for (part in snapshot.map { it.id }.chunked(EPG_REFRESH_CHUNK)) all += avs.epg(part)
+                    all
+                }.getOrNull()
+            } ?: return@launch
             epg.replace(data)
             if (guide.visibility != View.VISIBLE) trimEpg()
             adapter?.notifyDataSetChanged()
@@ -1230,6 +1317,10 @@ class MainActivity : Activity(), LifecycleOwner {
             lines += "Frames" to "${counters.droppedBufferCount} dropped of ${counters.renderedOutputBufferCount + counters.droppedBufferCount}"
         }
         lines += "Decoder" to decoderName
+        fun sec(ms: Long) = "%.2f".format(ms / 1000f)
+        lines += "Zap" to if (zapFrameMs < 0) "-" else "${sec(zapFrameMs)} s to picture" +
+            "  (URL ${if (zapUrlMs < 0) "-" else sec(zapUrlMs)}, keys ${if (zapKeysMs < 0) "-" else sec(zapKeysMs)}, " +
+            "decoder ${if (zapDecoderMs < 0) "kept" else "opened in ${sec(zapDecoderMs)}"})"
         val age = if (this::avs.isInitialized) avs.sessionAgeMs() else -1L
         lines += "Session" to if (age < 0) "-"
         else "${clockLength(age / 1000)} old  (renews after ${AvsClient.SESSION_TTL_MS / 3_600_000} h)"
@@ -1389,7 +1480,11 @@ class MainActivity : Activity(), LifecycleOwner {
                 IdentityStore.save(prefs, Identity(account, deviceId))
                 loginPass.setText("")
                 login.visibility = View.GONE
-                avs = AvsClient(account, deviceId)
+                avs = AvsClient(account, deviceId, prefs)
+                channelFile.delete() // another account can have another lineup
+                channels = emptyList()
+                current = -1
+                previous = -1
                 loadChannels()
             }.onFailure {
                 showLoginError("Sign in failed: ${it.message}")
@@ -1430,6 +1525,13 @@ class MainActivity : Activity(), LifecycleOwner {
             KeyEvent.KEYCODE_MEDIA_STOP, KeyEvent.KEYCODE_SPACE,
         )
         private const val GUARD_MS = 2500L
+        private const val AUTH_REFUSED = "KPN no longer accepts this TV. Sign in again."
+        /** Zaps closer together than this are a run; the last one of a run tunes after the settle time. */
+        private const val ZAP_RUN_MS = 400L
+        private const val ZAP_SETTLE_MS = 250L
+        /** With a remembered channel list, the fresh one is fetched this long after start, clear of the first tune. */
+        private const val CHANNEL_REFRESH_DELAY_MS = 8_000L
+        private const val EPG_REFRESH_CHUNK = 36
         private const val STREAM_FADE_MS = 700L
         private const val SEEK_REPEAT_MS = 1500L
         private const val SEEK_HINT_MS = 1800L

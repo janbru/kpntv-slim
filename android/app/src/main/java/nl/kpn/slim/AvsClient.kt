@@ -1,11 +1,17 @@
 package nl.kpn.slim
 
+import android.content.SharedPreferences
 import android.os.Build
+import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.util.concurrent.CancellationException
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 data class Channel(
     val id: Int,
@@ -58,18 +64,55 @@ open class AvsException(message: String, val httpStatus: Int = 0) : IOException(
 /** The server refused to give this deviceId a session (not registered, or signed out elsewhere). */
 class AuthException(message: String) : AvsException(message)
 
+/** The channel list of the last run, so the next start can tune before the network has answered. */
+object ChannelStore {
+    fun load(file: File): List<Channel> = try {
+        val a = JSONArray(file.readText())
+        (0 until a.length()).map { i ->
+            val o = a.getJSONObject(i)
+            Channel(o.getInt("id"), o.getInt("number"), o.getString("name"), o.getInt("assetId"),
+                o.optString("logoUrl").takeIf { it.isNotEmpty() })
+        }
+    } catch (_: Exception) {
+        emptyList()
+    }
+
+    fun save(file: File, channels: List<Channel>) {
+        try {
+            val a = JSONArray()
+            for (c in channels) a.put(JSONObject().put("id", c.id).put("number", c.number).put("name", c.name)
+                .put("assetId", c.assetId).put("logoUrl", c.logoUrl.orEmpty()))
+            val tmp = File(file.path + ".tmp")
+            tmp.writeText(a.toString())
+            tmp.renameTo(file)
+        } catch (_: Exception) {
+            // Only a cache: the next start simply loads the list from the network first.
+        }
+    }
+}
+
 /**
  * Minimal client for KPN's Nagra/MediaKind AVS backend. See API_CONTRACT.md.
- * Not thread-safe by design; call from a single dispatcher (the caller serializes).
+ *
+ * HTTP calls run one at a time (AVS rotates cookies and the xsrf token on its replies), in the order they were
+ * asked for, so a zap never queues behind more than the one request that is already on the wire. Replies are
+ * turned into objects outside that lock.
+ *
+ * With [prefs] the AVS host and the session survive a restart, which saves the EAR and SESSIONS round trips on
+ * the way to the first picture.
  */
 class AvsClient(
     private val account: String,
     private val deviceId: String,
+    private val prefs: SharedPreferences? = null,
 ) {
+    private val lock = ReentrantLock(true)
     private var avsHost: String? = null
     private val cookies = linkedMapOf<String, String>()
     private var xsrf: String? = null
-    private var sessionAt = 0L
+    @Volatile private var sessionAt = 0L
+
+    init { restore() }
 
     /** Milliseconds since the current session was made; -1 before the first one. For the stats overlay. */
     fun sessionAgeMs(): Long = if (sessionAt == 0L) -1 else System.currentTimeMillis() - sessionAt
@@ -81,10 +124,8 @@ class AvsClient(
      * like the KPN web player's subscription number + pincode login. [account] is the abonnementsnummer.
      * Returns the account number (what later sessions need) as given back in the profile.
      */
-    @Synchronized
-    fun register(pin: String): String = newSession(pin).ifEmpty { account }
+    fun register(pin: String): String = lock.withLock { newSession(pin).ifEmpty { account } }
 
-    @Synchronized
     fun liveChannels(): List<Channel> {
         val json = authed {
             get("$base/TRAY/LIVECHANNELS?orderBy=orderId&sortOrder=asc&from=0&to=999" +
@@ -110,7 +151,6 @@ class AvsClient(
      * keyed by channelId and sorted by start. The default is the next 3 h for the whole lineup (~400 KB); the
      * TV guide asks for a handful of channels and a few hours at a time (~5 KB per channel and 3 h).
      */
-    @Synchronized
     fun epg(
         channelIds: List<Int>,
         fromMs: Long = System.currentTimeMillis(),
@@ -158,12 +198,15 @@ class AvsClient(
         return out
     }
 
-    @Synchronized
-    fun liveStream(ch: Channel, startAtMs: Long? = null): Stream {
+    /**
+     * [wanted] is asked once this call is at the front of the queue: when the viewer has zapped on in the
+     * meantime, the request is not made at all.
+     */
+    fun liveStream(ch: Channel, startAtMs: Long? = null, wanted: () -> Boolean = { true }): Stream {
         // Live: the official app rounds `time` down to 5 minutes (CDN-cache friendly).
         // Start over: `time` = the programme start; the returned manifest then begins at that moment.
         val time = startAtMs ?: (System.currentTimeMillis() / 300_000 * 300_000)
-        val json = authed {
+        val json = authed(wanted) {
             get("$base/CONTENT/VIDEOURL/LIVE/${ch.id}/${ch.assetId}?deviceId=$deviceId&profile=G09&time=$time")
         }
         return streamOf(json)
@@ -174,7 +217,6 @@ class AvsClient(
      * `CUTV` one is a static manifest (seekable, 20 min longer than the programme: the recording runs a little
      * before and after), the `SOTV` one is the live-style start-over stream. Same play-URL call as live otherwise.
      */
-    @Synchronized
     fun catchUpStream(p: Program): Stream {
         val detail = authed { get("$base/CONTENT/DETAIL/PROGRAM/${p.id}") }
         val assets = detail.getJSONObject("resultObj").getJSONArray("containers").getJSONObject(0).optJSONArray("assets")
@@ -197,15 +239,43 @@ class AvsClient(
         return Stream(sources.getString("src"), license)
     }
 
-    /** Runs [block] with a valid session; on failure re-creates the session once and retries. */
-    private fun authed(block: () -> JSONObject): JSONObject {
-        if (avsHost == null || System.currentTimeMillis() - sessionAt > SESSION_TTL_MS) newSession()
-        return try {
+    /**
+     * Runs [block] with a valid session; on failure re-creates the session once and retries. The host is looked
+     * up again for that retry, because it may be a remembered one that KPN has since moved away from.
+     */
+    private fun authed(wanted: () -> Boolean = { true }, block: () -> JSONObject): JSONObject = lock.withLock {
+        if (!wanted()) throw CancellationException()
+        if (avsHost == null || cookies.isEmpty() || System.currentTimeMillis() - sessionAt > SESSION_TTL_MS) newSession()
+        try {
             block()
         } catch (e: IOException) {
+            avsHost = null
             newSession()
             block()
         }
+    }
+
+    /** Picks up the host and, while it is still fresh, the session that an earlier run of the app left behind. */
+    private fun restore() {
+        val saved = try { JSONObject(prefs?.getString(KEY_STATE, null) ?: return) } catch (_: Exception) { return }
+        if (saved.optString("deviceId") != deviceId) return
+        avsHost = saved.optString("host").takeIf { it.isNotEmpty() }
+        val at = saved.optLong("at")
+        val jar = saved.optJSONObject("cookies")
+        if (jar == null || System.currentTimeMillis() - at !in 0..SESSION_TTL_MS) return
+        for (name in jar.keys()) cookies[name] = jar.getString(name)
+        xsrf = saved.optString("xsrf").takeIf { it.isNotEmpty() }
+        sessionAt = at
+    }
+
+    /** AVS rotates the tokens on its replies, so the remembered session is rewritten after every call. */
+    private fun persist() {
+        val p = prefs ?: return
+        val jar = JSONObject()
+        for ((name, value) in cookies) jar.put(name, value)
+        val state = JSONObject().put("deviceId", deviceId).put("host", avsHost.orEmpty())
+            .put("at", sessionAt).put("xsrf", xsrf.orEmpty()).put("cookies", jar)
+        p.edit().putString(KEY_STATE, state.toString()).apply()
     }
 
     /** Creates a session. With [pin] it also registers the deviceId; returns the account number from the profile. */
@@ -238,6 +308,7 @@ class AvsClient(
         }
         if (cookies["avs6_cookie"] == null) throw AuthException("Session refused (no avs6_cookie)")
         sessionAt = System.currentTimeMillis()
+        persist()
         return json.optJSONObject("resultObj")?.optJSONObject("profile")?.optJSONObject("profileData")
             ?.optString("username").orEmpty()
     }
@@ -267,6 +338,7 @@ class AvsClient(
             }
             val code = conn.responseCode
             captureSession(conn)
+            if (auth) persist()
             val text = (if (code < 400) conn.inputStream else conn.errorStream)
                 ?.bufferedReader()?.use { it.readText() }.orEmpty()
             if (code !in 200..299) throw AvsException("HTTP $code for ${url.substringBefore('?').substringAfterLast("/kpn")}", code)
@@ -312,5 +384,6 @@ class AvsClient(
         /** Logos are shown at most 40 dp high; 100 px is sharp on a 1080p TV and only ~3 KB. */
         const val LOGO_HEIGHT = 100
         const val SESSION_TTL_MS = 3L * 60 * 60 * 1000 // avs6_cookie lives 4h
+        private const val KEY_STATE = "avsState"
     }
 }
