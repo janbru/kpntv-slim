@@ -1,6 +1,6 @@
 # KPN TV+ slim: project state & next steps
 
-Last updated: 2026-11-10 (session 8). Read this first when resuming.
+Last updated: 2026-11-10 (end of session 8). Read this first when resuming.
 
 ## Status: native app works on the TV (v0.10)
 
@@ -20,6 +20,10 @@ Measured with the new **Zap** line in the Blue stats overlay (seconds from tune 
 - **Start-up from cache**: the channel list (`files/channels.json`, `ChannelStore`), the AVS host and the session cookies plus xsrf token (prefs `avsState`, rewritten after every call because AVS rotates them) survive a restart. A start within 3 h of the last use goes straight to `VIDEOURL`; the fresh channel list is fetched 8 s later and replaces the cached one only when it differs (`applyChannels`). A refused remembered session falls back to a new one (and a new EAR lookup) by the existing retry. A tune that fails with `AuthException` now shows the sign-in.
 - **Start buffer**: nothing to change, Media3 1.11.1 already starts after 1 s of buffer (`DEFAULT_BUFFER_FOR_PLAYBACK_MS`), less than one 1.92 s segment.
 - **`android/install.sh`**: install, `cmd package compile -m speed -f nl.kpn.slim` (ahead-of-time compile, otherwise a fresh install runs interpreted until Android's idle compile), launch.
+
+- **Banner progress bar** (session 8): green up to the playback position, light grey from there to the live point while behind live in a programme that is still on air (`progress_live`, `osd_progress.xml`), and never less than a sliver of green (`MIN_PROGRESS`). A dimmer green for the live part read as the progress itself right after a restart.
+- **Speed ideas left** (none started): prefetch the play URL of the neighbouring channels (the play URL is 0.2 to 0.4 s of a 0.4 to 0.8 s zap, so this is the only step left with a visible gain; first test whether KPN counts a fetched URL as an active stream), keep the last frame instead of black during a zap (`PlayerView.setKeepContentOnPlayerReset`), now/next cached on disk so the banner has titles right at a cached start, a lighter `outputFormat` for the now/next refresh if AVS has one (check the web player's `app.js`).
+- Seen on the TV in session 8, not looked into: the stats overlay showed the audio as "Dutch · AAC stereo" on NPO 1 and RTL 4, while the user's remembered choice was "Ned · AC-3 5.1".
 
 ### Build, install, setup
 - Build: `cd android && ./gradlew assembleRelease` (JDK 21 pinned in `gradle.properties`; Homebrew's default JDK 26 breaks Gradle 8.14). To build without the optional account/deviceId seed (what a fresh user gets, and what is on the TV now): add `-Pkpn.account= -Pkpn.deviceId=`.
