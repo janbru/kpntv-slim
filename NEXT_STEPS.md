@@ -31,7 +31,7 @@ Measured with the new **Zap** line in the Blue stats overlay (seconds from tune 
 - Install: `./install.sh` (install, ahead-of-time compile, launch), or by hand: `~/Library/Android/sdk/platform-tools/adb -s 192.168.2.21:5555 install -r app/build/outputs/apk/release/app-release.apk` (debug-keystore signed; coexists with the official app). Launch: `adb shell am start -n nl.kpn.slim/.MainActivity`.
 - **`android/gradle.properties` is git-ignored** (JDK path, and optionally an account + deviceId seed). On a fresh clone copy `gradle.properties.example` to `gradle.properties` and set the JDK path. The `kpn.account` / `kpn.deviceId` seed is optional: without it the app shows a one-time sign-in (see Sign-in below). With it, a fresh install skips the sign-in using that already registered pair; stored values in the app's preferences win over the seed afterwards. Also ignored: `capture/` (tokens, WireGuard keys), `jadx-out/`, `libs/`, the `.apkm`, `tools/*.jar`, `my-tv.jpg`.
 - The web player at tv.kpn.com is a useful reference for URL patterns (its `app.js` is readable); try it before a recapture.
-- Account number and deviceId are redacted in FINDINGS.md, API_CONTRACT.md and this file (session 5), and in the project memory. Keep them out of every markdown file and commit. Locally they live only in the app's private preferences and, optionally, the git-ignored `android/gradle.properties`.
+- Account number and deviceId are redacted in API_CONTRACT.md and this file (session 5), and in the project memory. Keep them out of every markdown file and commit. Locally they live only in the app's private preferences and, optionally, the git-ignored `android/gradle.properties`.
 - Needs for the artwork script only: `rsvg-convert` (`brew install librsvg`), ImageMagick `magick`, the Inter font.
 
 ### Code map (`android/app/src/main/java/nl/kpn/slim/`)
@@ -94,7 +94,7 @@ Measured with the new **Zap** line in the Blue stats overlay (seconds from tune 
   - Programme: `https://images.tv.kpn.com/epg/{pictureUrl}/{w}x{h}.jpg?blurred=false` (`pictureUrl` from the EPG metadata; any WxH works; `vod/` instead of `epg/` for non-programme content; `blurred=true` gives a blurred variant; `round=true` gives a round PNG).
   - Provider logos: `/misc/provider/{id}/{w}x{h}.png`. The old `logoMedium`/`size_x/...` paths in the channel assets are dead.
 
-### Findings about the streams (see also FINDINGS.md)
+### Findings about the streams
 - Channel metadata says SD/MPEG-2 for every channel, but the DASH manifests have H.264 up to 1080p50 (6 and 8 Mbps), AC-3 5.1 at 384 kbps or AAC stereo 128 kbps, a Dutch subtitle stream and trick-play tracks. Some channels are 1080p25.
 - Per programme the EPG also has `pictureUrl`, `starRating`, `contentOptions` (`STARTOVER`, `CATCHUP`, `RECORDABLE`, `TV_PREMIERE`). Per channel: timeshift on 105, out-of-home (`OOH`) on 82, `PLUS` on 25, unicast on 21.
 - Firebase remote config (`capture/remote_config.json`) has ad tags and flags such as `highBandwidthStartEnabled`, `aiSearchEnabled`.
@@ -118,7 +118,7 @@ Suggested order for the next session (agreed with the user in session 7): (1) ha
 
 ## (Earlier) RE status: COMPLETE and validated.
 
-- Full report: **`FINDINGS.md`**. Exact HTTP contract: **`API_CONTRACT.md`**.
+- Exact HTTP contract: **`API_CONTRACT.md`**. The full RE report (`FINDINGS.md`) lives only on the local `findings` branch, which is never pushed.
 - The live-TV API chain (EAR → deviceId session → channel list → DASH+Widevine play URL) was captured and **re-validated from plain `curl` on macOS**. Nothing else is blocking the build.
 - TV was returned to stock after the capture: official KPN app reinstalled, WireGuard tunnel down, proxy cleared (the official app's data was wiped, so it would ask for its own login; our app does not depend on it).
 
@@ -128,7 +128,7 @@ Suggested order for the next session (agreed with the user in session 7): (1) ha
 |---|---|---|
 | `android/` | ✅ | the app (Gradle project); `android/art/` has the artwork generator and `preview.png` |
 | `*.apkm` | ✅ source | the original split bundle (re-extract anything from here) |
-| `FINDINGS.md`, `API_CONTRACT.md` | ✅ | the deliverable docs |
+| `API_CONTRACT.md` | ✅ | the deliverable doc (`FINDINGS.md` is on the local-only `findings` branch) |
 | `NEXT_STEPS.md` | ✅ | this file |
 | `jadx-out/` | ✅ | jadx decompilation (Java side; regenerable: `jadx -d jadx-out --deobf base.apk`) |
 | `libs/libapp.so` | ✅ | Dart AOT snapshot — `strings` it for any detail not yet captured |
