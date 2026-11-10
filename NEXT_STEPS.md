@@ -2,9 +2,9 @@
 
 Last updated: 2026-11-10 (end of session 8). Read this first when resuming.
 
-## Status: native app works on the TV (v0.10)
+## Status: native app works on the TV (v1.0.0)
 
-Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kpn.slim`, label "KPN Slim"). Release APK about 1.2 MB. New in v0.10 (session 7): audio and subtitle picker on Yellow, the skipped time shown while seeking, stream stats overlay on Blue, resume at the paused position after an expired play URL (built, not verified on the TV). New in v0.9 (session 6): a full TV guide grid and catch-up of earlier programmes, the buffering spinner now waits 1.5 s. New in v0.8 (session 5): one-time sign-in with abonnementsnummer + pincode (no more hardcoded deviceId), new icon and banner, in-app hint pill, Settings row with icon in the channel list.
+Minimal Kotlin + Media3 live-TV viewer for KPN TV+ in `android/` (package `nl.kpn.slim`, label "KPN Slim"). Release APK about 1.2 MB. New in v0.10 (session 7, released as 1.0.0): audio and subtitle picker on Yellow, the skipped time shown while seeking, stream stats overlay on Blue, resume at the paused position after an expired play URL (built, not verified on the TV). New in v0.9 (session 6): a full TV guide grid and catch-up of earlier programmes, the buffering spinner now waits 1.5 s. New in v0.8 (session 5): one-time sign-in with abonnementsnummer + pincode (no more hardcoded deviceId), new icon and banner, in-app hint pill, Settings row with icon in the channel list.
 
 ### Speed work (session 8, 2026-11-10): verified on the TV
 Measured with the new **Zap** line in the Blue stats overlay (seconds from tune to picture, with the play URL and licence moments, and whether the decoder was kept or opened):

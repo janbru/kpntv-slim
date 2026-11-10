@@ -11,8 +11,8 @@ android {
         applicationId = "nl.kpn.slim"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1"
+        versionCode = 100
+        versionName = "1.0.0"
 
         // Optional developer seed: an account + deviceId that is already registered. Normally empty; the app then
         // asks for a one-time sign-in and registers its own random deviceId.
